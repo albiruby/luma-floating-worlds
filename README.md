@@ -1,394 +1,80 @@
-# LUMA: Floating Worlds
+# LUMA: Floating Worlds — The Living Archipelago
 
-<p align="center">
-  <strong>A Journey Across Worlds Beyond.</strong>
-</p>
+**LUMA: Floating Worlds** is an atmospheric isometric 3D puzzle adventure set across six fractured sky archipelagos and a central living sanctuary island. Guide the Wayfinder and four fellow heroes through 60 handcrafted islands, restore ancient beacons, speak with sanctuary keepers, complete 30 chronicles, and awaken **The Convergence**.
 
-<p align="center">
-  An open-source, browser-based 3D puzzle adventure featuring five playable heroes, six floating worlds, and sixty handcrafted stages.
-</p>
-
-<p align="center">
-  <strong>ZERO LOGIN · ZERO BACKEND · ZERO SERVER DATABASE</strong>
-</p>
+Built with React 19, TypeScript, Tailwind CSS, Three.js (`@react-three/fiber`), procedural Web Audio, and a strict **Zero Login · Zero Database · Zero Tracking** local-first architecture.
 
 ---
 
-## About
-
-**LUMA: Floating Worlds** is a stylized 3D isometric puzzle adventure set across a mysterious archipelago of floating islands.
-
-Explore ancient ruins, restore forgotten worlds, solve interconnected environmental puzzles, discover hidden memories, and unlock new heroes and cosmetic rewards.
-
-Travel through six unique regions, master sixty handcrafted stages, and uncover the secrets of the floating archipelago.
-
-LUMA is designed as a completely browser-based experience. Players can start playing immediately without creating an account, registering, or connecting to a cloud service.
-
-**Your adventure. Your world. Your save.**
-
-## Features
-
-### 60 Handcrafted Stages
-
-Explore 60 stages distributed across six distinctive worlds.
-
-| World | Stages | Theme |
-|---|---:|---|
-| The First Light | 01–10 | Ancient floating islands and original LUMA puzzles |
-| Verdant Reach | 11–20 | Enchanted forests and overgrown ruins |
-| Tidal Expanse | 21–30 | Floating lagoons and ancient waterways |
-| Emberfall Dominion | 31–40 | Volcanic islands and forgotten forges |
-| Celestial Frontier | 41–50 | Sky temples and celestial observatories |
-| The Echo Trials | 51–60 | Advanced puzzle challenges |
-
-### Five Playable Heroes
-
-Discover five original characters, each with a unique identity and signature ability.
-
-| Hero | Signature Ability |
-|---|---|
-| The Wayfinder | Lantern Focus |
-| Sylvi | Rootcall |
-| Neris | Tidal Pulse |
-| Kael | Ember Spark |
-| Zeph | Windstep |
-
-Character abilities interact with special regional mechanisms and environmental objects.
-
-All sixty stages remain completable with the starting hero, The Wayfinder. Additional heroes provide alternative interactions and gameplay opportunities without mandatory character lockouts.
-
-### Environmental Puzzle Systems
-
-Master interconnected environmental mechanisms:
-
-- Pressure switches and gates.
-- Latch, toggle, and inverted switch logic.
-- Rotating platforms and bridges.
-- Elevation platforms and lifts.
-- Light emitters and directional prisms.
-- Sub-Crystal Resonators.
-- Multi-stage crystal activation.
-- Character-specific environmental interactions.
-
-### Mastery & Progression
-
-Improve your performance across the entire campaign.
-
-- 180 possible mastery stars.
-- Three-star rating per stage.
-- Individual time and action targets.
-- Personal best records.
-- Luma Shards.
-- 60 collectible Echo Fragments.
-- 32 achievements.
-- Cosmetic unlock progression.
-
-### Wardrobe & Customization
-
-Personalize your heroes with 51 cosmetic items across seven categories:
-
-- Cloaks.
-- Lanterns.
-- Headwear.
-- Backpacks.
-- Auras.
-- Palettes.
-- Sets.
-
-Preview characters in 3D, customize their appearance, and unlock additional rewards through progression.
-
-### Echo Codex & Trophies
-
-Discover hidden memories, track collectible progress, and explore achievements throughout the campaign.
-
-### Developer Suite
-
-LUMA also includes an internal development and testing environment.
-
-Available exclusively in development builds.
-
-Features include:
-
-- Admin Console.
-- God Mode.
-- Direct access to all 60 stages.
-- Player teleportation and free camera.
-- Puzzle Inspector.
-- World Inspector.
-- Object Inspector.
-- Tile, collision, elevation, and light-path overlays.
-- Rendering diagnostics.
-- QA Test Runner.
-- Event Log.
-- Debug session isolation.
-
-Activate using `Ctrl + Shift + G` during development.
-
-Developer tools are excluded from production builds.
-
----
-
-## Visual Direction
-
-LUMA features a handcrafted stylized low-poly 3D art direction.
-
-Visual characteristics:
-
-- Isometric orthographic perspective.
-- Low-poly geometry.
-- Handcrafted miniature environments.
-- Soft directional lighting.
-- Atmospheric floating islands.
-- Stylized vegetation and architecture.
-- Crystal-based lighting and visual effects.
-- Cohesive regional color palettes.
-
-The goal is to create a distinctive fantasy world with carefully designed environments rather than procedurally generated visual clutter.
-
----
-
-## Screenshots
-
-<!-- Add screenshots or gameplay GIFs here before publishing. -->
-
-Suggested screenshots:
-
-- Main Title Screen.
-- The Convergence / Central Hub.
-- World Atlas.
-- Character Selection.
-- Wardrobe.
-- The First Light.
-- Verdant Reach.
-- Tidal Expanse.
-- Emberfall Dominion.
-- Celestial Frontier.
-- The Echo Trials.
-- Puzzle Gameplay.
-- Developer Suite.
-
----
-
-## Technology Stack
-
-| Technology | Purpose |
-|---|---|
-| React 19 | Application framework |
-| TypeScript | Type safety and game logic |
-| Three.js | 3D rendering |
-| React Three Fiber | React-based Three.js integration |
-| @react-three/drei | 3D utilities and helpers |
-| Tailwind CSS v4 | UI styling |
-| Vite | Development and production build |
-| Web Audio API | Procedural audio |
-| LocalStorage | Local game progression and preferences |
-
-### Architecture
-
-LUMA is a frontend-only single-page application.
-
-There is no required application backend, authentication service, or server-side game database.
-
-The game runs directly in the player's browser.
-
----
-
-## Privacy & Local Save System
-
-LUMA follows a local-first design philosophy.
-
-**No accounts. No login. No server database. No cloud save.**
-
-Player progression is stored locally in the browser using LocalStorage.
-
-Saved game information includes supported progression data such as:
-
-- Stage completion.
-- Hero unlocks.
-- Mastery progression.
-- Cosmetic unlocks.
-- Collectibles.
-- Achievements.
-- Game preferences.
-
-### Important Storage Information
-
-Local saves are associated with the browser profile and website origin.
-
-This means:
-
-- Progress remains available after refreshing or reopening the game in the same browser profile.
-- Clearing browser or website data can permanently remove local progress.
-- Private browsing sessions may not retain progress after the session ends.
-- Progress does not automatically synchronize between browsers or devices.
-- A different hosting domain has separate browser storage.
-
-There is no automatic cloud recovery.
-
-Manual save transfer through export/import is intended as a future capability.
-
-LUMA does not require players to provide personal information to access gameplay.
-
----
-
-## Getting Started
-
-### Requirements
-
-- Node.js.
-- npm.
-- A modern web browser.
-- WebGL-compatible graphics support.
-
-### Installation
-
-Clone the repository:
-
-```bash
-git clone https://github.com/YOUR_USERNAME/luma-floating-worlds.git
-```
-
-Navigate to the project:
-
-```bash
-cd luma-floating-worlds
-```
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Start the development server:
-
-```bash
-npm run dev
-```
-
-Open the local development URL displayed in your terminal.
-
-### Production Build
-
-Build the application:
-
-```bash
-npm run build
-```
-
-Preview the production build locally:
-
-```bash
-npm run preview
-```
-
-Available project scripts can be inspected using:
-
-```bash
-npm run
-```
+## Core Features
+
+### 1. The Convergence (Interactive 3D Sanctuary Hub)
+Walk freely across a multi-elevation central hub island divided into interconnected zones:
+- **Sanctuary Courtyard & Sixfold Portal Arc** — Approach any of the six sky-gates to enter unlocked Worlds directly.
+- **Central Sanctuary** — Commune with the Giant Central Crystal to inspect the connected World Map.
+- **Hero Sanctum** — Switch between the 5 playable heroes (*The Wayfinder*, *Sylvi*, *Neris*, *Kael*, *Zeph*).
+- **Wardrobe Atelier** — Equip star milestone cloaks, lanterns, headwear, backpacks, celestial auras, and dye palettes across 51 cosmetics.
+- **Echo Archive & Reward Gallery** — Review collected Echo Fragments, Trophies, and Mastery Milestones.
+- **Cartographer Quest Board** — Open the 6-Tab Living Journal.
+- **Forgotten Eastern Alcove** — Cross the stepping-stone causeway to uncover a quiet shrine.
+
+As you complete campaign stages and restoration chronicles, **The Convergence** evolves across three visual tiers: **Dormant → Awakening → Restored**, bringing light bridges, glowing lanterns, and floating blossoms back to life.
+
+### 2. 10 Living NPCs & Branching Dialogue
+Speak with 10 distinct characters across the Sanctuary—**Orin**, **Sera**, **Talen**, **Mira**, **Veyra**, **Brann**, **Lyra**, **Kori**, **Solon**, and **Elowen**. Each features reactive dialogue tied to your active hero, restoration tier, Echo count, and quest progression.
+
+### 3. 30 Quests & 6-Tab Living Journal
+Track chronicles, view multi-step checklists, claim one-time Shard & Title rewards, and browse world lore inside the Journal:
+- **Main Story** (6)
+- **World Restoration** (6)
+- **Hero Stories** (5)
+- **Side Quests** (8)
+- **Hidden Secrets** (5 — obscured until discovered)
+- **World Lore** (Chronicles, Echo Codex & Unlocked Titles)
+
+### 4. World Restoration, Connected World Map & 60 Stages
+Traverse all **6 Worlds** and **60 Stages** with rotating bridges, pressure gates, elevation lifts, prism light beams, hero resonance nodes, 180 Mastery Stars, and 60 Echo Fragments. Restoring a World visually uplifts its sky, ambient light, fog clarity, crystal resonance, and water luminescence.
+
+### 5. Mid-Run Checkpoints, Session History & Local Save Manager
+- **Mid-Run Checkpoints**: Pause and choose **Save Checkpoint & Enter Hub**, or hide/leave the browser tab—your hero coordinates, timer, action count, switches, lifts, bridges, and prism rotations save locally so you can resume right where you left off.
+- **Session History**: Keeps up to 5 recent run summaries per stage (clear time, actions, stars, Echo status, outcome).
+- **Backup & Recovery**: Every save writes atomically with an automatic backup snapshot and Schema v1/v2 → v3 lossless migration.
+- **Export / Import JSON**: Back up your journey to a `.json` file or transfer it to another browser with full validation preview before applying.
 
 ---
 
 ## Controls
 
-| Input | Action |
-|---|---|
-| WASD / Arrow Keys | Character movement |
-| E / Space | Interact |
-| Q | Activate character ability |
-| Mouse Wheel | Camera zoom |
-| R | Restart stage |
-| M | Toggle audio |
-| Esc / P | Pause |
-| Ctrl + Shift + G | Developer Console (development only) |
-
-Some interface controls may also be available through on-screen buttons.
+| Action | Input |
+| :--- | :--- |
+| Move | `W` `A` `S` `D` or Arrow Keys |
+| Interact / Speak / Activate | `E` or `Space` |
+| Hero Resonance Ability | `Q` |
+| Restart Current Island | `R` |
+| Pause / Hub Menu | `Esc` or `P` |
+| Mute Audio | `M` |
 
 ---
 
-## Testing
+## Privacy & Local-First Guarantee
 
-The project includes automated tests for game rules, progression, world definitions, and developer tools.
-
-Run the existing test suites:
-
-```bash
-npx --yes tsx --test \
-  src/game/rules.test.ts \
-  src/game/mastery.test.ts \
-  src/game/worlds.test.ts \
-  src/dev/devSuite.test.ts
-```
-
-Run the TypeScript check:
-
-```bash
-npx tsc --noEmit
-```
-
-Build the production application:
-
-```bash
-npm run build
-```
-
-The reported development milestone includes 39 passing automated tests, successful TypeScript checks, successful production builds, and browser verification.
+LUMA operates with **zero login, zero accounts, zero external servers, zero analytics, and zero third-party CDNs**. All progress lives exclusively in your browser's `localStorage`. See [PRIVACY.md](./PRIVACY.md) for full technical details.
 
 ---
 
-## Roadmap
+## Development & Static Deployment
 
-LUMA is an evolving open-source game.
+```bash
+npm install
+npm run dev       # Local development server on port 3000
+npm run lint      # TypeScript typecheck
+npm run build     # Production static bundle in ./dist (relative ./ paths)
+```
 
-Potential future developments include:
-
-- The Living Archipelago central hub.
-- Interactive NPCs and dialogue.
-- Main story and side quests.
-- Hero personal storylines.
-- Progressive world restoration.
-- Interactive world map.
-- Per-stage checkpoint improvements.
-- Session history.
-- Save export and import.
-- Additional environmental interactions.
-- Further visual and audio improvements.
-
-Roadmap items are not necessarily implemented in the current release.
-
----
-
-## Open Source
-
-LUMA is intended to be developed and distributed as an open-source project.
-
-Community contributions, bug reports, gameplay feedback, and development suggestions are welcome.
-
-Before submitting a contribution:
-
-1. Check existing issues.
-2. Describe the proposed change.
-3. Keep the existing visual identity consistent.
-4. Avoid breaking existing stage solutions and save compatibility.
-5. Include appropriate tests for gameplay logic changes.
-
-See the repository's contribution guidelines when available.
+Because `vite.config.ts` uses `base: './'` and bundles all assets locally without external network dependencies, the compiled `./dist` directory can be hosted directly on **GitHub Pages**, **Cloudflare Pages**, **Netlify**, **Vercel**, or any static file server.
 
 ---
 
 ## License
 
-A license has not yet been specified in this README.
-
-Add the selected open-source license as a `LICENSE` file before public release.
-
----
-
-<p align="center">
-  <strong>LUMA: FLOATING WORLDS</strong>
-  <br/>
-  Explore six worlds. Master sixty stages. Restore the floating archipelago.
-  <br/><br/>
-  Made for explorers, puzzle lovers, and fans of handcrafted fantasy worlds.
-</p>
+No `LICENSE` file is currently included in this repository root. Unless a license file is added by the repository owner, standard default copyright applies and no open-source grant should be assumed.

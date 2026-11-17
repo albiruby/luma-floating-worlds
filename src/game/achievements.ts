@@ -1,0 +1,280 @@
+import { getTotalStars } from './mastery';
+import { AchievementDef, SaveProgress } from './types';
+
+function completedInRange(completed: number[], minId: number, maxId: number): boolean {
+  for (let id = minId; id <= maxId; id++) {
+    if (!completed.includes(id)) return false;
+  }
+  return true;
+}
+
+export const ACHIEVEMENTS: AchievementDef[] = [
+  {
+    id: 'ach_first_spark',
+    title: 'First Spark',
+    description: 'Restore the crystal on Stage 01 and step through your first sky portal.',
+    category: 'journey',
+    shardReward: 10,
+    evaluate: (p) => p.completedLevels.includes(1),
+  },
+  {
+    id: 'ach_world_1_clear',
+    title: 'Keeper of First Light',
+    description: 'Complete all 10 stages of World I: The First Light.',
+    category: 'journey',
+    shardReward: 25,
+    evaluate: (p) => completedInRange(p.completedLevels, 1, 10),
+  },
+  {
+    id: 'ach_world_2_clear',
+    title: 'Voice of the Canopy',
+    description: 'Complete all 10 stages of World II: Verdant Reach.',
+    category: 'journey',
+    shardReward: 30,
+    evaluate: (p) => completedInRange(p.completedLevels, 11, 20),
+  },
+  {
+    id: 'ach_world_3_clear',
+    title: 'Tideweaver Navigator',
+    description: 'Complete all 10 stages of World III: Tidal Expanse.',
+    category: 'journey',
+    shardReward: 35,
+    evaluate: (p) => completedInRange(p.completedLevels, 21, 30),
+  },
+  {
+    id: 'ach_world_4_clear',
+    title: 'Crucible Heart',
+    description: 'Complete all 10 stages of World IV: Emberfall Dominion.',
+    category: 'journey',
+    shardReward: 40,
+    evaluate: (p) => completedInRange(p.completedLevels, 31, 40),
+  },
+  {
+    id: 'ach_world_5_clear',
+    title: 'Crown of the Horizon',
+    description: 'Complete all 10 stages of World V: Celestial Frontier.',
+    category: 'journey',
+    shardReward: 50,
+    evaluate: (p) => completedInRange(p.completedLevels, 41, 50),
+  },
+  {
+    id: 'ach_world_6_clear',
+    title: 'Champion of Echoes',
+    description: 'Conquer all 10 bonus stages of World VI: The Echo Trials.',
+    category: 'journey',
+    shardReward: 75,
+    evaluate: (p) => completedInRange(p.completedLevels, 51, 60),
+  },
+  {
+    id: 'ach_60_islands',
+    title: 'Skies Reunited',
+    description: 'Restore the crystals across all 60 floating islands.',
+    category: 'journey',
+    shardReward: 100,
+    evaluate: (p) => p.completedLevels.length >= 60,
+  },
+  {
+    id: 'ach_unlock_sylvi',
+    title: 'Rootcall Awakened',
+    description: 'Unlock Sylvi, the Grovewarden.',
+    category: 'heroes',
+    shardReward: 15,
+    evaluate: (p) => (p.unlockedCharacters ?? []).includes('sylvi'),
+  },
+  {
+    id: 'ach_unlock_neris',
+    title: 'Tidecaller Pact',
+    description: 'Unlock Neris, the Tidecaller.',
+    category: 'heroes',
+    shardReward: 15,
+    evaluate: (p) => (p.unlockedCharacters ?? []).includes('neris'),
+  },
+  {
+    id: 'ach_unlock_kael',
+    title: 'Emberwright Oath',
+    description: 'Unlock Kael, the Emberwright.',
+    category: 'heroes',
+    shardReward: 15,
+    evaluate: (p) => (p.unlockedCharacters ?? []).includes('kael'),
+  },
+  {
+    id: 'ach_unlock_zeph',
+    title: 'Windstep Horizon',
+    description: 'Unlock Zeph, the Skyweaver.',
+    category: 'heroes',
+    shardReward: 20,
+    evaluate: (p) => (p.unlockedCharacters ?? []).includes('zeph'),
+  },
+  {
+    id: 'ach_all_heroes',
+    title: 'Fellowship of Five',
+    description: 'Unlock all five playable heroes of LUMA.',
+    category: 'heroes',
+    shardReward: 40,
+    evaluate: (p) => (p.unlockedCharacters ?? []).length >= 5,
+  },
+  {
+    id: 'ach_stars_6',
+    title: 'Starlight Gatherer',
+    description: 'Earn 6 Mastery Stars.',
+    category: 'mastery',
+    shardReward: 10,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 6,
+  },
+  {
+    id: 'ach_stars_15',
+    title: 'Precision Pilgrim',
+    description: 'Earn 15 Mastery Stars.',
+    category: 'mastery',
+    shardReward: 15,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 15,
+  },
+  {
+    id: 'ach_stars_30',
+    title: 'Luminous Scholar',
+    description: 'Earn 30 Mastery Stars.',
+    category: 'mastery',
+    shardReward: 25,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 30,
+  },
+  {
+    id: 'ach_stars_60',
+    title: 'Radiant Architect',
+    description: 'Earn 60 Mastery Stars.',
+    category: 'mastery',
+    shardReward: 35,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 60,
+  },
+  {
+    id: 'ach_stars_90',
+    title: 'Skyward Virtuoso',
+    description: 'Earn 90 Mastery Stars.',
+    category: 'mastery',
+    shardReward: 45,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 90,
+  },
+  {
+    id: 'ach_stars_120',
+    title: 'Astral Tactician',
+    description: 'Earn 120 Mastery Stars.',
+    category: 'mastery',
+    shardReward: 55,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 120,
+  },
+  {
+    id: 'ach_stars_150',
+    title: 'Paragon of Light',
+    description: 'Earn 150 Mastery Stars.',
+    category: 'mastery',
+    shardReward: 70,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 150,
+  },
+  {
+    id: 'ach_stars_180',
+    title: 'Eternal Perfection',
+    description: 'Earn all 180 Mastery Stars across all 60 stages.',
+    category: 'mastery',
+    shardReward: 120,
+    evaluate: (p) => getTotalStars(p.masteryRecords) >= 180,
+  },
+  {
+    id: 'ach_three_star_10',
+    title: 'Tenfold Flawless',
+    description: 'Achieve 3-Star mastery on 10 distinct stages.',
+    category: 'mastery',
+    shardReward: 20,
+    evaluate: (p) => Object.values(p.masteryRecords).filter((r) => r.bestStars === 3).length >= 10,
+  },
+  {
+    id: 'ach_three_star_30',
+    title: 'Thirtyfold Flawless',
+    description: 'Achieve 3-Star mastery on 30 distinct stages.',
+    category: 'mastery',
+    shardReward: 40,
+    evaluate: (p) => Object.values(p.masteryRecords).filter((r) => r.bestStars === 3).length >= 30,
+  },
+  {
+    id: 'ach_echo_1',
+    title: 'Whisper in Stone',
+    description: 'Collect your first hidden Echo Fragment.',
+    category: 'exploration',
+    shardReward: 10,
+    evaluate: (p) => (p.collectedEchoFragments ?? []).length >= 1,
+  },
+  {
+    id: 'ach_echo_10',
+    title: 'Echo Listener',
+    description: 'Collect 10 hidden Echo Fragments.',
+    category: 'exploration',
+    shardReward: 20,
+    evaluate: (p) => (p.collectedEchoFragments ?? []).length >= 10,
+  },
+  {
+    id: 'ach_echo_25',
+    title: 'Archivist of Skies',
+    description: 'Collect 25 hidden Echo Fragments.',
+    category: 'exploration',
+    shardReward: 35,
+    evaluate: (p) => (p.collectedEchoFragments ?? []).length >= 25,
+  },
+  {
+    id: 'ach_echo_45',
+    title: 'Lorekeeper Beyond',
+    description: 'Collect 45 hidden Echo Fragments.',
+    category: 'exploration',
+    shardReward: 50,
+    evaluate: (p) => (p.collectedEchoFragments ?? []).length >= 45,
+  },
+  {
+    id: 'ach_echo_60',
+    title: 'Memory Restored',
+    description: 'Collect all 60 hidden Echo Fragments.',
+    category: 'exploration',
+    shardReward: 90,
+    evaluate: (p) => (p.collectedEchoFragments ?? []).length >= 60,
+  },
+  {
+    id: 'ach_wardrobe_12',
+    title: 'Traveler’s Wardrobe',
+    description: 'Unlock 12 or more wardrobe cosmetics.',
+    category: 'collection',
+    shardReward: 20,
+    evaluate: (p) => p.unlockedCosmetics.length >= 12,
+  },
+  {
+    id: 'ach_wardrobe_25',
+    title: 'Curator of Craft',
+    description: 'Unlock 25 or more wardrobe cosmetics.',
+    category: 'collection',
+    shardReward: 35,
+    evaluate: (p) => p.unlockedCosmetics.length >= 25,
+  },
+  {
+    id: 'ach_wardrobe_40',
+    title: 'Grand Regalia',
+    description: 'Unlock 40 or more wardrobe cosmetics.',
+    category: 'collection',
+    shardReward: 60,
+    evaluate: (p) => p.unlockedCosmetics.length >= 40,
+  },
+  {
+    id: 'ach_dedicated_25',
+    title: 'Steadfast Wayfinder',
+    description: 'Complete 25 successful island runs.',
+    category: 'mastery',
+    shardReward: 20,
+    evaluate: (p) => p.statistics.totalCompletions >= 25,
+  },
+];
+
+export function evaluateUnlockedAchievements(progress: SaveProgress): string[] {
+  return ACHIEVEMENTS.filter((a) => a.evaluate(progress)).map((a) => a.id);
+}
+
+export function getNewlyUnlockedAchievements(
+  prevIds: string[],
+  nextProgress: SaveProgress
+): AchievementDef[] {
+  const prevSet = new Set(prevIds);
+  return ACHIEVEMENTS.filter((a) => !prevSet.has(a.id) && a.evaluate(nextProgress));
+}
