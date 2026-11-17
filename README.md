@@ -6,6 +6,22 @@ Built with React 19, TypeScript, Tailwind CSS, Three.js (`@react-three/fiber`), 
 
 ---
 
+## Gameplay Screenshots
+
+| Title Screen | The Convergence (3D Sanctuary Hub) |
+| :---: | :---: |
+| ![Title Screen](./docs/screenshots/01-title-screen.png) | ![The Convergence Hub](./docs/screenshots/02-convergence-hub.png) |
+
+| Wayfinder Journal (30 Quests) | Interactive World Map (6 Worlds / 60 Stages) |
+| :---: | :---: |
+| ![Wayfinder Journal](./docs/screenshots/03-wayfinder-journal.png) | ![Interactive World Map](./docs/screenshots/04-world-map.png) |
+
+| Stage 01: The Awakening Gameplay |
+| :---: |
+| ![Stage Gameplay](./docs/screenshots/05-stage-gameplay.png) |
+
+---
+
 ## Core Features
 
 ### 1. The Convergence (Interactive 3D Sanctuary Hub)
