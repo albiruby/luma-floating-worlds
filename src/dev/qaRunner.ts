@@ -5,6 +5,7 @@ import { runMasterySuite } from './tests/masteryTests';
 import { runPuzzleSystemsSuite } from './tests/puzzleTests';
 import { runRenderingDiagnosticsSuite } from './tests/renderingTests';
 import { runSaveSystemSuite } from './tests/saveTests';
+import { runUnboundSuite } from './tests/unboundTests';
 
 export interface RunQASuiteOptions {
   currentLevelId: number;
@@ -43,6 +44,9 @@ export function executeQASuite(
     case 'cosmetics':
       results = runCosmeticsSuite();
       break;
+    case 'unbound':
+      results = runUnboundSuite();
+      break;
     case 'rendering':
       results = runRenderingDiagnosticsSuite(options.diagnostics);
       break;
@@ -53,6 +57,7 @@ export function executeQASuite(
         ...runSaveSystemSuite({ devActive: options.devActive, snapshot: options.snapshot }),
         ...runMasterySuite(),
         ...runCosmeticsSuite(),
+        ...runUnboundSuite(),
         ...runRenderingDiagnosticsSuite(options.diagnostics),
       ];
       break;

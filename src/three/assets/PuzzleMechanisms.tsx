@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import {
   CrystalDef,
   EchoFragmentDef,
+  EchoPlateDef,
   ELEVATION_STEP,
   ElevationPlatformDef,
   GateDef,
@@ -16,6 +17,7 @@ import {
   PuzzleRuntimeState,
   RotatingPlatformDef,
   SubCrystalDef,
+  SynergyNodeDef,
   TILE_SIZE,
 } from '../../game/types';
 import { getCharacterById } from '../../game/characters';
@@ -936,6 +938,192 @@ const EchoFragmentNode: React.FC<{
   );
 };
 
+const EchoPlateNode: React.FC<{
+  plate: EchoPlateDef;
+  puzzleStateRef: React.MutableRefObject<PuzzleRuntimeState>;
+  palette: LumaMaterialPalette;
+  onRegisterFrame: (cb: (dt: number, elapsed: number) => void) => () => void;
+}> = ({ plate, puzzleStateRef, palette, onRegisterFrame }) => {
+  const plateRef = useRef<THREE.Mesh>(null);
+  const ringRef = useRef<THREE.Mesh>(null);
+
+  const geos = useMemo(() => {
+    const base = new THREE.CylinderGeometry(0.72, 0.82, 0.14, 8);
+    const pad = new THREE.CylinderGeometry(0.54, 0.56, 0.1, 8);
+    const ring = new THREE.TorusGeometry(0.58, 0.045, 6, 16);
+    const crest = new THREE.OctahedronGeometry(0.16, 0);
+    return { base, pad, ring, crest };
+  }, []);
+  React.useEffect(() => () => Object.values(geos).forEach((g) => g.dispose()), [geos]);
+
+  const activeMat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 1.4,
+        roughness: 0.2,
+        flatShading: true,
+      }),
+    []
+  );
+  const idleMat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: plate.echoOnly ? 0x1e4e68 : 0x475569,
+        emissive: plate.echoOnly ? 0x0284c7 : 0x000000,
+        emissiveIntensity: plate.echoOnly ? 0.45 : 0,
+        roughness: 0.45,
+        flatShading: true,
+      }),
+    [plate.echoOnly]
+  );
+
+  React.useEffect(
+    () => () => {
+      activeMat.dispose();
+      idleMat.dispose();
+    },
+    [activeMat, idleMat]
+  );
+
+  React.useEffect(() => {
+    return onRegisterFrame((dt, elapsed) => {
+      const active = Boolean(puzzleStateRef.current.echoPlateStates?.[plate.id]);
+      if (plateRef.current) {
+        const targetY = active ? 0.07 : 0.14;
+        plateRef.current.position.y = THREE.MathUtils.damp(plateRef.current.position.y, targetY, 14, dt);
+        plateRef.current.material = active ? activeMat : idleMat;
+      }
+      if (ringRef.current) {
+        ringRef.current.rotation.z = elapsed * (active ? 1.8 : 0.4);
+        ringRef.current.material = active ? activeMat : palette.brassAccent;
+      }
+    });
+  }, [activeMat, idleMat, onRegisterFrame, palette.brassAccent, plate.id, puzzleStateRef]);
+
+  return (
+    <group position={[plate.x * TILE_SIZE, plate.elevation * ELEVATION_STEP, plate.z * TILE_SIZE]}>
+      <mesh geometry={geos.base} material={palette.sandstoneRuin} position={[0, 0.07, 0]} receiveShadow />
+      <mesh ref={plateRef} geometry={geos.pad} material={idleMat} position={[0, 0.14, 0]} castShadow />
+      <mesh ref={ringRef} geometry={geos.ring} material={palette.brassAccent} position={[0, 0.16, 0]} rotation={[Math.PI / 2, 0, 0]} />
+      {plate.echoOnly && (
+        <mesh geometry={geos.crest} material={activeMat} position={[0, 0.36, 0]} scale={[0.7, 1.1, 0.7]} />
+      )}
+    </group>
+  );
+};
+
+const SynergyNodeObject: React.FC<{
+  node: SynergyNodeDef;
+  puzzleStateRef: React.MutableRefObject<PuzzleRuntimeState>;
+  palette: LumaMaterialPalette;
+  onRegisterFrame: (cb: (dt: number, elapsed: number) => void) => () => void;
+}> = ({ node, puzzleStateRef, palette, onRegisterFrame }) => {
+  const ringARef = useRef<THREE.Mesh>(null);
+  const ringBRef = useRef<THREE.Mesh>(null);
+  const coreRef = useRef<THREE.Mesh>(null);
+  const bridgeRef = useRef<THREE.Group>(null);
+  const progressRef = useRef(0);
+
+  const heroA = useMemo(() => getCharacterById(node.heroA), [node.heroA]);
+  const heroB = useMemo(() => getCharacterById(node.heroB), [node.heroB]);
+
+  const geos = useMemo(() => {
+    const plinth = new THREE.CylinderGeometry(0.54, 0.68, 0.34, 8);
+    const ring = new THREE.TorusGeometry(0.48, 0.045, 6, 16);
+    const core = new THREE.OctahedronGeometry(0.24, 0);
+    const bridgeSlab = new THREE.BoxGeometry(TILE_SIZE * 0.92, 0.24, TILE_SIZE * 0.92);
+    const bridgeTrim = new THREE.BoxGeometry(TILE_SIZE * 0.72, 0.06, TILE_SIZE * 0.72);
+    return { plinth, ring, core, bridgeSlab, bridgeTrim };
+  }, []);
+  React.useEffect(() => () => Object.values(geos).forEach((g) => g.dispose()), [geos]);
+
+  const matA = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: heroA.defaultColors.accentColor,
+        emissive: heroA.defaultColors.toolEmissiveColor,
+        emissiveIntensity: 0.9,
+        roughness: 0.25,
+        flatShading: true,
+      }),
+    [heroA]
+  );
+  const matB = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: heroB.defaultColors.accentColor,
+        emissive: heroB.defaultColors.toolEmissiveColor,
+        emissiveIntensity: 0.9,
+        roughness: 0.25,
+        flatShading: true,
+      }),
+    [heroB]
+  );
+  React.useEffect(
+    () => () => {
+      matA.dispose();
+      matB.dispose();
+    },
+    [matA, matB]
+  );
+
+  React.useEffect(() => {
+    return onRegisterFrame((dt, elapsed) => {
+      const active = Boolean(puzzleStateRef.current.synergyNodesActive?.[node.id]);
+      progressRef.current = THREE.MathUtils.damp(progressRef.current, active ? 1 : 0, 7, dt);
+
+      if (ringARef.current) {
+        ringARef.current.rotation.z = elapsed * (active ? 1.8 : 0.6);
+        ringARef.current.rotation.x = Math.PI / 2 + Math.sin(elapsed * 1.4) * 0.18;
+      }
+      if (ringBRef.current) {
+        ringBRef.current.rotation.z = -elapsed * (active ? 1.8 : 0.6);
+        ringBRef.current.rotation.y = elapsed * 0.8;
+      }
+      if (coreRef.current) {
+        coreRef.current.position.y = (active ? 0.96 : 0.74) + Math.sin(elapsed * 2.5) * 0.06;
+        coreRef.current.rotation.y = elapsed * 1.5;
+        coreRef.current.material = active ? palette.crystalActive : palette.crystalDormant;
+      }
+      if (bridgeRef.current) {
+        const p = progressRef.current;
+        bridgeRef.current.visible = p > 0.02;
+        bridgeRef.current.children.forEach((c, idx) => {
+          const s = THREE.MathUtils.clamp(p * 1.15 - idx * 0.06, 0.001, 1);
+          c.scale.set(s, s, s);
+        });
+      }
+    });
+  }, [node.id, onRegisterFrame, palette.crystalActive, palette.crystalDormant, puzzleStateRef]);
+
+  return (
+    <group>
+      <group position={[node.x * TILE_SIZE, node.elevation * ELEVATION_STEP, node.z * TILE_SIZE]}>
+        <mesh geometry={geos.plinth} material={palette.sandstoneRuin} position={[0, 0.17, 0]} receiveShadow castShadow />
+        <mesh ref={ringARef} geometry={geos.ring} material={matA} position={[0, 0.44, 0]} />
+        <mesh ref={ringBRef} geometry={geos.ring} material={matB} position={[0, 0.64, 0]} scale={0.78} />
+        <mesh ref={coreRef} geometry={geos.core} material={palette.crystalDormant} position={[0, 0.74, 0]} />
+      </group>
+
+      {node.bridgeTiles && node.bridgeTiles.length > 0 && (
+        <group ref={bridgeRef} visible={false}>
+          {node.bridgeTiles.map((bt) => (
+            <group
+              key={`${bt.x}_${bt.z}`}
+              position={[bt.x * TILE_SIZE, bt.elevation * ELEVATION_STEP, bt.z * TILE_SIZE]}
+            >
+              <mesh geometry={geos.bridgeSlab} material={palette.woodWarm} position={[0, -0.12, 0]} receiveShadow castShadow />
+              <mesh geometry={geos.bridgeTrim} material={matA} position={[0, 0.01, 0]} />
+            </group>
+          ))}
+        </group>
+      )}
+    </group>
+  );
+};
+
 export const PuzzleMechanisms: React.FC<PuzzleMechanismsProps> = ({
   level,
   puzzleStateRef,
@@ -1060,6 +1248,26 @@ export const PuzzleMechanisms: React.FC<PuzzleMechanismsProps> = ({
 
       {(level.heroNodes ?? []).map((node) => (
         <HeroNodeObject
+          key={node.id}
+          node={node}
+          puzzleStateRef={puzzleStateRef}
+          palette={palette}
+          onRegisterFrame={onRegisterFrame}
+        />
+      ))}
+
+      {(level.echoPlates ?? []).map((plate) => (
+        <EchoPlateNode
+          key={plate.id}
+          plate={plate}
+          puzzleStateRef={puzzleStateRef}
+          palette={palette}
+          onRegisterFrame={onRegisterFrame}
+        />
+      ))}
+
+      {(level.synergyNodes ?? []).map((node) => (
+        <SynergyNodeObject
           key={node.id}
           node={node}
           puzzleStateRef={puzzleStateRef}

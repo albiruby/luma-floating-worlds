@@ -18,11 +18,15 @@ import {
   parseAndValidateImport,
   requestBrowserPersistentStorage,
 } from '../game/saveManager';
+import { triggerTextDownload } from '../game/customFormats';
+import { downloadDuelScorecardPng } from '../game/echoDuels';
 import {
   CompletionSummary,
   CosmeticId,
+  EchoDuelRecord,
   GameSettings,
   LevelDef,
+  LumaReplayFile,
   SaveProgress,
   WorldId,
 } from '../game/types';
@@ -42,6 +46,8 @@ import { StarRating } from './StarRating';
 interface PauseModalProps {
   level: LevelDef;
   isHubMode?: boolean;
+  activeMode?: 'campaign' | 'custom' | 'playtest' | 'daily_rift' | 'duel';
+  onReturnToForge?: () => void;
   onResume: () => void;
   onRestart: () => void;
   onSaveCheckpointAndExitToHub?: () => void;
@@ -58,6 +64,8 @@ interface PauseModalProps {
 export const PauseModal: React.FC<PauseModalProps> = ({
   level,
   isHubMode = false,
+  activeMode = 'campaign',
+  onReturnToForge,
   onResume,
   onRestart,
   onSaveCheckpointAndExitToHub,
@@ -96,7 +104,17 @@ export const PauseModal: React.FC<PauseModalProps> = ({
           >
             {isHubMode ? 'Resume Exploring' : 'Resume Journey'}
           </button>
-          {!isHubMode && onSaveCheckpointAndExitToHub && (
+          {activeMode === 'playtest' && onReturnToForge && (
+            <button
+              type="button"
+              data-testid="pause-return-forge-btn"
+              onClick={onReturnToForge}
+              className="w-full py-2.5 rounded-lg bg-[#24c9b8] hover:bg-[#35dbca] text-[#112329] font-extrabold text-xs uppercase tracking-wider border-2 border-[#1f2d38] cursor-pointer"
+            >
+              Return to World Forge
+            </button>
+          )}
+          {!isHubMode && activeMode === 'campaign' && onSaveCheckpointAndExitToHub && (
             <button
               type="button"
               data-testid="pause-save-hub-btn"
@@ -191,6 +209,10 @@ interface VictoryModalProps {
   level: LevelDef;
   summary: CompletionSummary;
   hasNextLevel: boolean;
+  activeMode?: 'campaign' | 'custom' | 'playtest' | 'daily_rift' | 'duel';
+  duelResult?: EchoDuelRecord | null;
+  lastRunReplay?: LumaReplayFile | null;
+  onReturnToForge?: () => void;
   onContinue: () => void;
   onReplay: () => void;
   onOpenLevels?: () => void;
@@ -202,6 +224,10 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   level,
   summary,
   hasNextLevel,
+  activeMode = 'campaign',
+  duelResult = null,
+  lastRunReplay = null,
+  onReturnToForge,
   onContinue,
   onReplay,
   onOpenLevels,
@@ -299,7 +325,17 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
     : null;
 
   const statusHeadline =
-    rating.stars === 3
+    activeMode === 'playtest'
+      ? 'Playtest Verified · Zero Campaign Rewards'
+      : activeMode === 'duel' && duelResult
+      ? duelResult.challengerWon
+        ? 'Echo Duel Won · Record Surpassed'
+        : 'Echo Duel Complete'
+      : activeMode === 'daily_rift'
+      ? 'Daily Rift Cleared'
+      : activeMode === 'custom'
+      ? 'Custom Sanctum Cleared'
+      : rating.stars === 3
       ? 'Island Mastered · 3 / 3 Stars'
       : summary.improvedStars && summary.previousBestStars > 0
       ? `Star Rating Improved (${summary.previousBestStars}★ → ${rating.stars}★)`
@@ -321,49 +357,74 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
             <CrystalIcon active className="w-9 h-9 shrink-0" />
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#178a80]">
-                W{world.order} · {hasNextLevel ? 'Crystal Restored' : 'Echo Trials Conquered'}
+                {activeMode === 'playtest'
+                  ? 'World Forge · Playtest'
+                  : activeMode === 'duel'
+                  ? 'Echo Duel · Async Ghost Race'
+                  : activeMode === 'daily_rift'
+                  ? 'Daily Rift · Seeded Run'
+                  : activeMode === 'custom'
+                  ? 'Community Foundry · Clear'
+                  : `W${world.order} · ${hasNextLevel ? 'Crystal Restored' : 'Echo Trials Conquered'}`}
               </p>
               <h2 className="font-display text-2xl font-bold leading-tight">{level.title}</h2>
             </div>
           </div>
-          <div className="text-right shrink-0">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-[#9b6a24]">
-              Campaign Stars
+          {activeMode === 'campaign' && (
+            <div className="text-right shrink-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-[#9b6a24]">
+                Campaign Stars
+              </div>
+              <div className="text-sm font-extrabold tabular-nums text-[#1f2d38]">
+                {summary.totalStarsAfter} / {MAX_CAMPAIGN_STARS} ★
+              </div>
             </div>
-            <div className="text-sm font-extrabold tabular-nums text-[#1f2d38]">
-              {summary.totalStarsAfter} / {MAX_CAMPAIGN_STARS} ★
-            </div>
-          </div>
+          )}
         </div>
 
         <p className="text-xs sm:text-sm text-[#43535e] mb-3.5">
-          {hasNextLevel
+          {activeMode === 'playtest'
+            ? 'Playtest completed! Your stage works cleanly and has been marked Playtest Verified.'
+            : activeMode !== 'campaign'
+            ? 'Sanctum restored! Export a Replay Ghost to challenge friends offline or continue exploring.'
+            : hasNextLevel
             ? 'Ancient energy flows through the sanctum once more. Review your mastery challenges below.'
             : `All ${LEVELS.length} floating sanctuaries across the six worlds now blaze with harmony.`}
         </p>
 
         {/* Star Reveal Card + Rewards Strip */}
         <div className="rounded-lg bg-[#efe6cf] border-2 border-[#1f2d38] p-4 mb-3 flex flex-col items-center text-center">
-          <StarRating
-            stars={rating.stars}
-            revealedUpTo={revealedStars}
-            size="lg"
-            className="gap-2.5"
-          />
+          {activeMode === 'campaign' && (
+            <StarRating
+              stars={rating.stars}
+              revealedUpTo={revealedStars}
+              size="lg"
+              className="gap-2.5"
+            />
+          )}
           <div
             data-testid="victory-status-headline"
-            className="mt-2 font-display text-base font-bold text-[#1f2d38]"
+            className="mt-1 font-display text-base font-bold text-[#1f2d38]"
           >
             {statusHeadline}
           </div>
 
           <div className="mt-2 flex flex-wrap items-center justify-center gap-3 text-xs font-bold">
-            <span
-              data-testid="victory-shards-earned"
-              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-[#f8f1df] border border-[#253542] text-[#9b6a24] tabular-nums"
-            >
-              <ShardIcon className="w-3.5 h-3.5" />+{summary.lumaShardsEarned} Luma Shards
-            </span>
+            {activeMode === 'campaign' ? (
+              <span
+                data-testid="victory-shards-earned"
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-[#f8f1df] border border-[#253542] text-[#9b6a24] tabular-nums"
+              >
+                <ShardIcon className="w-3.5 h-3.5" />+{summary.lumaShardsEarned} Luma Shards
+              </span>
+            ) : (
+              <span
+                data-testid="victory-shards-earned"
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-[#f8f1df] border border-[#253542] text-[#4b5c68] tabular-nums"
+              >
+                0 Campaign Shards (Sandbox / Unbound Mode)
+              </span>
+            )}
             {summary.echoCollectedInRun && (
               <span
                 data-testid="victory-echo-collected"
@@ -375,6 +436,39 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
             )}
           </div>
         </div>
+
+        {/* Echo Duel Comparison & PNG Scorecard */}
+        {activeMode === 'duel' && duelResult && (
+          <div
+            data-testid="victory-duel-comparison"
+            className="rounded-lg bg-[#1d2d37] border-2 border-[#ebb652] p-3.5 mb-3 text-[#f6eedb] space-y-2"
+          >
+            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[#ebb652]">
+              <span>Echo Duel Comparison</span>
+              <span>{duelResult.verifiedReplay ? 'Deterministic Verified' : 'Visual Reference'}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs tabular-nums">
+              <div className="rounded bg-[#132028] p-2 border border-[#324957]">
+                <div className="text-[10px] uppercase text-[#9ab4bf]">Rival ({duelResult.creatorAlias})</div>
+                <div className="font-extrabold text-base">{duelResult.creatorTime.toFixed(1)}s</div>
+                <div className="text-[11px] text-[#cbe5ea]">{duelResult.creatorActions} Actions</div>
+              </div>
+              <div className="rounded bg-[#132028] p-2 border border-[#24c9b8]">
+                <div className="text-[10px] uppercase text-[#66e6d5]">Your Run</div>
+                <div className="font-extrabold text-base">{duelResult.challengerTime.toFixed(1)}s</div>
+                <div className="text-[11px] text-[#cbe5ea]">{duelResult.challengerActions} Actions</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid="victory-download-scorecard-btn"
+              onClick={() => downloadDuelScorecardPng(duelResult)}
+              className="w-full py-2 rounded bg-[#ebb652] hover:bg-[#f5c467] text-[#1a262e] font-extrabold text-xs uppercase tracking-wider cursor-pointer"
+            >
+              Download PNG Scorecard
+            </button>
+          </div>
+        )}
 
         {/* Challenge Breakdown: Action + Time */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-3">
@@ -516,14 +610,45 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
 
         {/* Action Buttons */}
         <div className="flex flex-col gap-2.5">
-          <button
-            type="button"
-            data-start="true"
-            onClick={onContinue}
-            className="w-full py-3 rounded-lg bg-[#24c9b8] hover:bg-[#33d9c8] text-[#112329] font-extrabold text-sm uppercase tracking-wider border-2 border-[#1f2d38] shadow-[0_3px_0_#1f2d38] cursor-pointer"
-          >
-            {hasNextLevel ? 'Continue to Next Island' : 'Play From Beginning'}
-          </button>
+          {activeMode === 'playtest' && onReturnToForge ? (
+            <button
+              type="button"
+              data-start="true"
+              onClick={onReturnToForge}
+              className="w-full py-3 rounded-lg bg-[#24c9b8] hover:bg-[#33d9c8] text-[#112329] font-extrabold text-sm uppercase tracking-wider border-2 border-[#1f2d38] shadow-[0_3px_0_#1f2d38] cursor-pointer"
+            >
+              Return to World Forge
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-start="true"
+              onClick={onContinue}
+              className="w-full py-3 rounded-lg bg-[#24c9b8] hover:bg-[#33d9c8] text-[#112329] font-extrabold text-sm uppercase tracking-wider border-2 border-[#1f2d38] shadow-[0_3px_0_#1f2d38] cursor-pointer"
+            >
+              {activeMode !== 'campaign'
+                ? 'Back to Showcase'
+                : hasNextLevel
+                ? 'Continue to Next Island'
+                : 'Play From Beginning'}
+            </button>
+          )}
+          {lastRunReplay && (
+            <button
+              type="button"
+              data-testid="victory-export-replay-btn"
+              onClick={() =>
+                triggerTextDownload(
+                  `${level.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.luma-replay`,
+                  JSON.stringify(lastRunReplay, null, 2)
+                )
+              }
+              className="w-full py-2 rounded-lg bg-[#1d2d37] hover:bg-[#2a3f4c] text-[#f6eedb] font-bold text-xs uppercase tracking-wider border-2 border-[#141e25] cursor-pointer"
+            >
+              Export {lastRunReplay.verified ? 'Verified ' : ''}.luma-replay (
+              {lastRunReplay.frames.length} ticks)
+            </button>
+          )}
           <div className="flex gap-2">
             <button
               type="button"
@@ -532,7 +657,7 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
             >
               Replay
             </button>
-            {onOpenLevels && (
+            {onOpenLevels && activeMode === 'campaign' && (
               <button
                 type="button"
                 onClick={onOpenLevels}

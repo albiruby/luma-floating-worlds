@@ -25,6 +25,7 @@ import { PlayerControlsPanel } from './panels/PlayerControlsPanel';
 import { PuzzleInspectorPanel } from './panels/PuzzleInspectorPanel';
 import { QATestRunnerPanel } from './panels/QATestRunnerPanel';
 import { RenderingPanel } from './panels/RenderingPanel';
+import { UnboundInspectorPanel } from './panels/UnboundInspectorPanel';
 import { WorldInspectorPanel } from './panels/WorldInspectorPanel';
 
 interface DeveloperConsoleProps {
@@ -100,6 +101,7 @@ const TABS: Array<{ id: DevTabId; label: string }> = [
   { id: 'puzzles', label: 'Puzzle Inspector' },
   { id: 'world', label: 'World Inspector' },
   { id: 'archipelago', label: 'Archipelago' },
+  { id: 'unbound', label: 'Unbound' },
   { id: 'rendering', label: 'Rendering' },
   { id: 'qa', label: 'QA Test Runner' },
   { id: 'events', label: 'Event Log' },
@@ -348,6 +350,17 @@ export const DeveloperConsole: React.FC<DeveloperConsoleProps> = (props) => {
             onApplyPlayerStateDev={(next) => props.onApplyPlayerStateDev?.(next)}
             onLoadLevelDev={props.onLoadLevel}
             onEmitEvent={props.onEmitArchipelagoEvent}
+          />
+        )}
+
+        {activeTab === 'unbound' && (
+          <UnboundInspectorPanel
+            level={level}
+            puzzleState={puzzleState}
+            onApplyPuzzleStateDev={props.onApplyPuzzleStateDev}
+            onEmitEvent={(type, details, objectId) =>
+              props.onEmitArchipelagoEvent?.(type, objectId ? `${details} [${objectId}]` : details)
+            }
           />
         )}
 

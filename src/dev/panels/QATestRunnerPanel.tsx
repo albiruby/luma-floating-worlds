@@ -14,6 +14,7 @@ const SUITE_BUTTONS: Array<{ id: QASuiteId; label: string; primary?: boolean }> 
   { id: 'save-system', label: 'Save & Isolation' },
   { id: 'mastery', label: 'Mastery (180★)' },
   { id: 'cosmetics', label: 'Cosmetics (51)' },
+  { id: 'unbound', label: 'Unbound Systems' },
   { id: 'rendering', label: 'Rendering Check' },
 ];
 

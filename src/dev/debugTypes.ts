@@ -13,6 +13,7 @@ export type DevTabId =
   | 'puzzles'
   | 'world'
   | 'archipelago'
+  | 'unbound'
   | 'rendering'
   | 'qa'
   | 'events';
@@ -103,6 +104,7 @@ export type QASuiteId =
   | 'save-system'
   | 'mastery'
   | 'cosmetics'
+  | 'unbound'
   | 'rendering'
   | 'full';
 

@@ -6,6 +6,17 @@ import {
   captureStageCheckpoint,
   restoreFromCheckpoint,
 } from './game/checkpoints';
+import { DailyRiftSpec } from './game/dailyRift';
+import {
+  ActiveDuelSession,
+  buildEchoDuelRecord,
+  prepareDuelSession,
+} from './game/echoDuels';
+import {
+  buildLumaReplayFile,
+  ECHO_TICK_RATE,
+  verifyReplayDeterministically,
+} from './game/echoEngine';
 import {
   CONVERGENCE_HUB_LEVEL,
   HUB_AREAS,
@@ -18,22 +29,31 @@ import {
   collectEchoInProgress,
   DEFAULT_PROGRESS,
   DEFAULT_SETTINGS,
+  deleteCustomStageInProgress,
   equipCosmeticInProgress,
   getActiveEquippedCosmetics,
   loadProgressWithMeta,
   purchaseCosmeticInProgress,
   recordAbilityUsedInProgress,
+  recordDailyRiftAttemptInProgress,
+  recordEchoDuelResultInProgress,
   recordHubAreaVisitedInProgress,
   recordLevelAttempt,
   recordLevelCompletionDetailed,
   recordNpcTalkedInProgress,
+  recordRecentlyPlayedCustomInProgress,
   recordSessionSnapshotInProgress,
   restoreDefaultCosmetics,
+  saveCustomStageInProgress,
+  saveImportedPackInProgress,
   saveProgressWithResult,
+  saveReplayInProgress,
   saveStageCheckpointInProgress,
   selectCharacterInProgress,
+  setActivePartyCompanionInProgress,
   setActiveTitleInProgress,
   setTrackedQuestInProgress,
+  toggleFavoriteStageInProgress,
   validateSaveProgress,
 } from './game/progression';
 import { getTrackedQuestBannerInfo } from './game/questEvaluator';
@@ -52,17 +72,28 @@ import {
   CharacterId,
   CompletionSummary,
   CosmeticId,
+  EchoDuelRecord,
+  EchoInputFrame,
+  EchoKeyEvent,
   GameScreenState,
   GameSettings,
   HubAreaId,
+  LevelDef,
+  LumaCustomStageFile,
+  LumaReplayFile,
+  LumaStagePackFile,
   NpcId,
   PlayerRuntimeState,
   PuzzleRuntimeState,
   SaveProgress,
   SaveStatus,
 } from './game/types';
+import { createInitialForgeState, WorldForgeState } from './game/worldForge';
 import { WORLDS } from './game/worlds';
-import { GameScene, HubInteractionTarget, HudSyncSnapshot } from './three/GameScene';
+import { EchoControlRuntime, GameScene, HubInteractionTarget, HudSyncSnapshot } from './three/GameScene';
+import { CommunityFoundryModal } from './ui/CommunityFoundryModal';
+import { DailyRiftModal } from './ui/DailyRiftModal';
+import { EchoDuelsModal } from './ui/EchoDuelsModal';
 import { GameHud } from './ui/GameHud';
 import {
   LevelSelectModal,
@@ -77,6 +108,7 @@ import { NpcChoiceAction, NpcDialogueModal } from './ui/NpcDialogueModal';
 import { RewardsGalleryModal } from './ui/RewardsGalleryModal';
 import { TitleScreen } from './ui/TitleScreen';
 import { WardrobeModal } from './ui/WardrobeModal';
+import { WorldForgeEditor } from './ui/WorldForgeEditor';
 import { WorldMapModal } from './ui/WorldMapModal';
 
 const LazyDeveloperSuiteRoot = import.meta.env.DEV
@@ -158,8 +190,21 @@ export default function App() {
   const [showRewards, setShowRewards] = useState(false);
   const [showJournal, setShowJournal] = useState(false);
   const [showWorldMap, setShowWorldMap] = useState(false);
+  const [showFoundry, setShowFoundry] = useState(false);
+  const [showDailyRift, setShowDailyRift] = useState(false);
+  const [showEchoDuels, setShowEchoDuels] = useState(false);
   const [activeNpcId, setActiveNpcId] = useState<NpcId | null>(null);
   const [hubAreaTitle, setHubAreaTitle] = useState<string | null>('Sanctuary Courtyard');
+
+  // Unbound Active Mode State
+  const [activeMode, setActiveMode] = useState<'campaign' | 'custom' | 'playtest' | 'daily_rift' | 'duel'>('campaign');
+  const [activeCustomStage, setActiveCustomStage] = useState<LumaCustomStageFile | null>(null);
+  const [activeRiftSpec, setActiveRiftSpec] = useState<DailyRiftSpec | null>(null);
+  const [activeDuelSession, setActiveDuelSession] = useState<ActiveDuelSession | null>(null);
+  const [lastDuelRecord, setLastDuelRecord] = useState<EchoDuelRecord | null>(null);
+  const [lastRunReplay, setLastRunReplay] = useState<LumaReplayFile | null>(null);
+  const [forgeDraftState, setForgeDraftState] = useState<WorldForgeState | undefined>(undefined);
+
   const [toastBanner, setToastBanner] = useState<string | null>(() =>
     initialRead.recoveredFromBackup
       ? 'Primary save was damaged — automatically restored from your local backup.'
@@ -183,6 +228,21 @@ export default function App() {
   const devBridgeRef = useRef<DevRuntimeBridge | null>(null);
   const devSessionSnapshotRef = useRef<DevSessionSnapshot | null>(null);
   const bonusShardsInRunRef = useRef(0);
+
+  const echoControlRef = useRef<EchoControlRuntime>({
+    recordingSlot: null,
+    recordingTicks: 0,
+    maxRecordingTicks: 12 * ECHO_TICK_RATE,
+    isPlayingBack: false,
+    playbackTick: 0,
+    slots: [null, null, null],
+    slotOffsets: [0, 0, 0],
+    anchorPlayer: null,
+    anchorPuzzle: null,
+    pendingCommand: null,
+  });
+  const replayFramesRef = useRef<EchoInputFrame[]>([]);
+  const replayKeyEventsRef = useRef<EchoKeyEvent[]>([]);
 
   const showToast = useCallback((message: string) => {
     setToastBanner(message);
@@ -210,7 +270,36 @@ export default function App() {
   const isHubMode =
     screenState === 'hub' ||
     (screenState === 'paused' && pausedFromScreenRef.current === 'hub');
-  const sceneLevel = isHubMode ? CONVERGENCE_HUB_LEVEL : currentLevel;
+  const sceneLevel: LevelDef = useMemo(() => {
+    if (isHubMode) return CONVERGENCE_HUB_LEVEL;
+    if (activeMode === 'playtest' && forgeDraftState) return forgeDraftState.level;
+    if (activeMode === 'daily_rift' && activeRiftSpec) return activeRiftSpec.level;
+    if ((activeMode === 'custom' || activeMode === 'duel') && activeCustomStage) {
+      return activeCustomStage.level;
+    }
+    return currentLevel;
+  }, [activeCustomStage, activeMode, activeRiftSpec, currentLevel, forgeDraftState, isHubMode]);
+
+  const activeCompanionHeroId: CharacterId | null = useMemo(() => {
+    if (isHubMode || activeMode === 'campaign') return null;
+    const preferred =
+      sceneLevel.requiredCompanion ?? progress.activePartyHero2 ?? null;
+    if (!preferred || preferred === effectiveCharacterId) {
+      return sceneLevel.partyEnabled
+        ? effectiveCharacterId === 'neris'
+          ? 'sylvi'
+          : 'neris'
+        : null;
+    }
+    return preferred;
+  }, [
+    activeMode,
+    effectiveCharacterId,
+    isHubMode,
+    progress.activePartyHero2,
+    sceneLevel.partyEnabled,
+    sceneLevel.requiredCompanion,
+  ]);
 
   const totalStars = useMemo(
     () => getTotalStars(progress.masteryRecords),
@@ -334,16 +423,39 @@ export default function App() {
     setShowSettings(false);
     setShowJournal(false);
     setShowWorldMap(false);
+    setShowFoundry(false);
+    setShowDailyRift(false);
+    setShowEchoDuels(false);
     setActiveNpcId(null);
   }, []);
 
+  const resetUnboundBuffers = useCallback((lvl: LevelDef) => {
+    replayFramesRef.current = [];
+    replayKeyEventsRef.current = [];
+    echoControlRef.current = {
+      recordingSlot: null,
+      recordingTicks: 0,
+      maxRecordingTicks: (lvl.maxEchoSeconds ?? 12) * ECHO_TICK_RATE,
+      isPlayingBack: false,
+      playbackTick: 0,
+      slots: [null, null, null],
+      slotOffsets: [0, 0, 0],
+      anchorPlayer: null,
+      anchorPuzzle: null,
+      pendingCommand: null,
+    };
+    setLastDuelRecord(null);
+    setLastRunReplay(null);
+  }, []);
+
   const resetLevelEntities = useCallback(
-    (levelId: number, characterIdOverride?: CharacterId) => {
-      const lvl = levelId === 0 ? CONVERGENCE_HUB_LEVEL : getLevelById(levelId);
+    (levelId: number, characterIdOverride?: CharacterId, customLevelOverride?: LevelDef) => {
+      const lvl = customLevelOverride ?? (levelId === 0 ? CONVERGENCE_HUB_LEVEL : getLevelById(levelId));
       const charId = characterIdOverride ?? effectiveCharacterId;
       bonusShardsInRunRef.current = 0;
       puzzleStateRef.current = createInitialPuzzleState(lvl, charId);
       playerRef.current = createInitialPlayerState(lvl);
+      resetUnboundBuffers(lvl);
       setHud({
         interactPrompt: null,
         crystalRestored: false,
@@ -357,7 +469,7 @@ export default function App() {
       });
       setResetToken((t) => t + 1);
     },
-    [effectiveCharacterId]
+    [effectiveCharacterId, resetUnboundBuffers]
   );
 
   const syncHudFromPuzzle = useCallback(() => {
@@ -432,10 +544,14 @@ export default function App() {
   const enterHub = useCallback(
     (saveStageFirst = true) => {
       audioEngine.playUiClick();
-      if (saveStageFirst) {
+      if (saveStageFirst && activeMode === 'campaign') {
         persistActiveStageCheckpoint('checkpoint_saved');
       }
       closeAllOverlays();
+      setActiveMode('campaign');
+      setActiveCustomStage(null);
+      setActiveRiftSpec(null);
+      setActiveDuelSession(null);
       setCompletionSummary(null);
       resetLevelEntities(0);
       setHubAreaTitle('Sanctuary Courtyard');
@@ -445,7 +561,7 @@ export default function App() {
         commitProgress((prev) => recordHubAreaVisitedInProgress(prev, 'npc_district'));
       }
     },
-    [closeAllOverlays, commitProgress, persistActiveStageCheckpoint, resetLevelEntities]
+    [activeMode, closeAllOverlays, commitProgress, persistActiveStageCheckpoint, resetLevelEntities]
   );
 
   const startLevel = useCallback(
@@ -454,6 +570,10 @@ export default function App() {
       const lvl = getLevelById(levelId);
       const existingCheckpoint = progress.checkpoints?.[levelId];
 
+      setActiveMode('campaign');
+      setActiveCustomStage(null);
+      setActiveRiftSpec(null);
+      setActiveDuelSession(null);
       setCurrentLevelId(levelId);
       setCompletionSummary(null);
       closeAllOverlays();
@@ -464,6 +584,7 @@ export default function App() {
         puzzleStateRef.current = restored.puzzleState;
         playerRef.current = restored.playerState;
         bonusShardsInRunRef.current = restored.bonusShardsInRun;
+        resetUnboundBuffers(lvl);
         syncHudFromPuzzle();
         setResetToken((t) => t + 1);
         showToast(
@@ -492,9 +613,66 @@ export default function App() {
       effectiveCharacterId,
       progress.checkpoints,
       resetLevelEntities,
+      resetUnboundBuffers,
       showToast,
       syncHudFromPuzzle,
     ]
+  );
+
+  const launchCustomStage = useCallback(
+    (stage: LumaCustomStageFile, mode: 'custom' | 'duel' = 'custom', duelReplay?: LumaReplayFile) => {
+      audioEngine.playUiClick();
+      closeAllOverlays();
+      setCompletionSummary(null);
+      setActiveCustomStage(stage);
+      setActiveRiftSpec(null);
+      if (mode === 'duel' && duelReplay) {
+        setActiveDuelSession(prepareDuelSession(stage.level, duelReplay));
+      } else {
+        setActiveDuelSession(null);
+      }
+      setActiveMode(mode);
+      pausedFromScreenRef.current = 'playing';
+      resetLevelEntities(stage.level.id, effectiveCharacterId, stage.level);
+      if (!devActiveRef.current) {
+        commitProgress((prev) => recordRecentlyPlayedCustomInProgress(prev, stage.id));
+      }
+      setScreenState('playing');
+    },
+    [closeAllOverlays, commitProgress, effectiveCharacterId, resetLevelEntities]
+  );
+
+  const launchDailyRift = useCallback(
+    (spec: DailyRiftSpec) => {
+      audioEngine.playUiClick();
+      closeAllOverlays();
+      setCompletionSummary(null);
+      setActiveCustomStage(null);
+      setActiveDuelSession(null);
+      setActiveRiftSpec(spec);
+      setActiveMode('daily_rift');
+      pausedFromScreenRef.current = 'playing';
+      resetLevelEntities(spec.level.id, effectiveCharacterId, spec.level);
+      setScreenState('playing');
+    },
+    [closeAllOverlays, effectiveCharacterId, resetLevelEntities]
+  );
+
+  const launchForgePlaytest = useCallback(
+    (draft: WorldForgeState) => {
+      audioEngine.playUiClick();
+      closeAllOverlays();
+      setCompletionSummary(null);
+      setForgeDraftState(draft);
+      setActiveCustomStage(null);
+      setActiveRiftSpec(null);
+      setActiveDuelSession(null);
+      setActiveMode('playtest');
+      pausedFromScreenRef.current = 'playing';
+      resetLevelEntities(draft.level.id, effectiveCharacterId, draft.level);
+      setScreenState('playing');
+    },
+    [closeAllOverlays, effectiveCharacterId, resetLevelEntities]
   );
 
   const handleTitleStart = useCallback(() => {
@@ -510,6 +688,12 @@ export default function App() {
       setScreenState('hub');
       return;
     }
+    if (activeMode !== 'campaign') {
+      resetLevelEntities(sceneLevel.id, effectiveCharacterId, sceneLevel);
+      setCompletionSummary(null);
+      setScreenState('playing');
+      return;
+    }
     resetLevelEntities(currentLevelId);
     setCompletionSummary(null);
     if (!devActiveRef.current) {
@@ -519,7 +703,7 @@ export default function App() {
       });
     }
     setScreenState('playing');
-  }, [commitProgress, currentLevelId, isHubMode, resetLevelEntities]);
+  }, [activeMode, commitProgress, currentLevelId, effectiveCharacterId, isHubMode, resetLevelEntities, sceneLevel]);
 
   const handleTogglePause = useCallback(() => {
     audioEngine.playUiClick();
@@ -720,6 +904,101 @@ export default function App() {
         );
         return;
       }
+
+      // Build & deterministically verify replay snapshot (honest verification!)
+      const rawReplay = buildLumaReplayFile({
+        level: sceneLevel,
+        characterId: effectiveCharacterId,
+        companionId: activeCompanionHeroId,
+        clearSeconds: elapsedSeconds,
+        actionsUsed: interactionsCount,
+        stars: 0,
+        frames: replayFramesRef.current,
+        keyEvents: replayKeyEventsRef.current,
+        challengerAlias: 'Wayfinder',
+        verified: false,
+      });
+      const detCheck = verifyReplayDeterministically(sceneLevel, rawReplay);
+      const finalReplay: LumaReplayFile = {
+        ...rawReplay,
+        verified: detCheck.verified,
+      };
+      setLastRunReplay(finalReplay.frames.length > 0 ? finalReplay : null);
+
+      if (activeMode !== 'campaign') {
+        const curStars = getTotalStars(progress.masteryRecords);
+        const sandboxSummary: CompletionSummary = {
+          levelId: sceneLevel.id,
+          rating: {
+            levelId: sceneLevel.id,
+            completed: true,
+            stars: 0,
+            metCompletion: true,
+            metActionTarget: true,
+            metTimeTarget: true,
+            clearSeconds: Number(elapsedSeconds.toFixed(2)),
+            actionsUsed: interactionsCount,
+            timeTargetSeconds: 60,
+            actionTarget: 10,
+          },
+          isFirstCompletion: false,
+          improvedStars: false,
+          previousBestStars: 0,
+          isNewBestTime: false,
+          isNewBestActions: false,
+          newlyUnlockedMilestones: [],
+          newlyUnlockedCharacters: [],
+          newlyUnlockedAchievements: [],
+          echoCollectedInRun: false,
+          lumaShardsEarned: 0,
+          totalStarsBefore: curStars,
+          totalStarsAfter: curStars,
+        };
+
+        if (activeMode === 'playtest') {
+          setForgeDraftState((prev) => (prev ? { ...prev, verifiedByPlaytest: true } : prev));
+        } else if (activeMode === 'duel' && activeDuelSession) {
+          const duelRec = buildEchoDuelRecord({
+            session: activeDuelSession,
+            challengerTime: elapsedSeconds,
+            challengerActions: interactionsCount,
+          });
+          setLastDuelRecord(duelRec);
+          commitProgress((prev) => {
+            let next = recordEchoDuelResultInProgress(prev, duelRec);
+            if (finalReplay.verified) {
+              next = saveReplayInProgress(next, finalReplay);
+            }
+            return next;
+          });
+        } else if (activeMode === 'daily_rift' && activeRiftSpec) {
+          commitProgress((prev) => {
+            let next = recordDailyRiftAttemptInProgress(prev, {
+              dateKey: activeRiftSpec.dateKey,
+              seed: activeRiftSpec.seed,
+              generatorVersion: activeRiftSpec.generatorVersion,
+              challengeType: activeRiftSpec.challengeType,
+              completed: true,
+              clearSeconds: elapsedSeconds,
+              actionsUsed: interactionsCount,
+            });
+            if (finalReplay.verified) {
+              next = saveReplayInProgress(next, finalReplay);
+            }
+            return next;
+          });
+        } else if (activeMode === 'custom') {
+          if (finalReplay.verified) {
+            commitProgress((prev) => saveReplayInProgress(prev, finalReplay));
+          }
+        }
+
+        setCompletionSummary(sandboxSummary);
+        setScreenState('gameover');
+        return;
+      }
+
+      // Standard Campaign Completion (100% preserved)
       commitProgress((prev) => {
         const { progress: next, summary } = recordLevelCompletionDetailed(
           prev,
@@ -739,13 +1018,38 @@ export default function App() {
       });
       setScreenState('gameover');
     },
-    [commitProgress, currentLevelId]
+    [
+      activeCompanionHeroId,
+      activeDuelSession,
+      activeMode,
+      activeRiftSpec,
+      commitProgress,
+      currentLevelId,
+      effectiveCharacterId,
+      progress.masteryRecords,
+      sceneLevel,
+    ]
   );
 
   const handleVictoryContinue = useCallback(() => {
+    if (activeMode === 'custom') {
+      setShowFoundry(true);
+      setScreenState('title');
+      return;
+    }
+    if (activeMode === 'daily_rift') {
+      setShowDailyRift(true);
+      setScreenState('title');
+      return;
+    }
+    if (activeMode === 'duel') {
+      setShowEchoDuels(true);
+      setScreenState('title');
+      return;
+    }
     const nextLevelId = currentLevelId < LEVELS.length ? currentLevelId + 1 : 1;
     startLevel(nextLevelId);
-  }, [currentLevelId, startLevel]);
+  }, [activeMode, currentLevelId, startLevel]);
 
   const handleOpenWardrobe = useCallback(
     (focusCosmeticId?: CosmeticId, focusHeroId?: CharacterId) => {
@@ -986,6 +1290,9 @@ export default function App() {
     showSettings ||
     showJournal ||
     showWorldMap ||
+    showFoundry ||
+    showDailyRift ||
+    showEchoDuels ||
     Boolean(activeNpcId);
 
   useEffect(() => {
@@ -995,6 +1302,9 @@ export default function App() {
       e.preventDefault();
       if (activeNpcId) setActiveNpcId(null);
       else if (showSettings) setShowSettings(false);
+      else if (showFoundry) setShowFoundry(false);
+      else if (showDailyRift) setShowDailyRift(false);
+      else if (showEchoDuels) setShowEchoDuels(false);
       else if (showWardrobe) setShowWardrobe(false);
       else if (showHeroes) setShowHeroes(false);
       else if (showRewards) setShowRewards(false);
@@ -1007,6 +1317,9 @@ export default function App() {
   }, [
     activeNpcId,
     anyModalOpen,
+    showDailyRift,
+    showEchoDuels,
+    showFoundry,
     showHeroes,
     showJournal,
     showLevelSelect,
@@ -1018,6 +1331,7 @@ export default function App() {
 
   const activeEchoPreviouslyCollected = Boolean(
     !isHubMode &&
+      activeMode === 'campaign' &&
       currentLevel.echoFragment &&
       (progress.collectedEchoFragments ?? []).includes(currentLevel.echoFragment.id)
   );
@@ -1034,34 +1348,41 @@ export default function App() {
   return (
     <main className="relative w-full h-full overflow-hidden">
       {/* Persistent 3D WebGL Diorama Viewport */}
-      <GameScene
-        level={sceneLevel}
-        screenState={screenState}
-        cameraZoomOffset={progress.settings.cameraZoomOffset}
-        equippedCosmetics={effectiveEquippedCosmetics}
-        activeCharacterId={effectiveCharacterId}
-        abilityTriggerToken={abilityTriggerToken}
-        resetToken={resetToken}
-        puzzleStateRef={puzzleStateRef}
-        playerRef={playerRef}
-        devBridgeRef={import.meta.env.DEV ? devBridgeRef : undefined}
-        devRevision={devRevision}
-        pauseLoop={anyModalOpen}
-        hubTier={hubTier}
-        restoredWorlds={restoredWorlds}
-        highestUnlockedLevel={progress.highestUnlockedLevel}
-        activeQuestNpcIds={activeQuestNpcIds}
-        talkedNpcIds={progress.npcTalkedIds ?? []}
-        onHubAreaChanged={handleHubAreaChanged}
-        onHubInteract={handleHubInteract}
-        onHudSync={setHud}
-        onLevelComplete={handleLevelComplete}
-        onHeroAbilityActivated={handleHeroAbilityActivated}
-        onEchoCollected={handleEchoCollected}
-        onTogglePause={handleTogglePause}
-        onQuickRestart={handleQuickRestart}
-        onToggleMute={handleToggleMute}
-      />
+      {screenState !== 'forge' && (
+        <GameScene
+          level={sceneLevel}
+          screenState={screenState}
+          cameraZoomOffset={progress.settings.cameraZoomOffset}
+          equippedCosmetics={effectiveEquippedCosmetics}
+          activeCharacterId={effectiveCharacterId}
+          companionCharacterId={activeCompanionHeroId}
+          abilityTriggerToken={abilityTriggerToken}
+          resetToken={resetToken}
+          puzzleStateRef={puzzleStateRef}
+          playerRef={playerRef}
+          echoControlRef={echoControlRef}
+          replayFramesRef={replayFramesRef}
+          replayKeyEventsRef={replayKeyEventsRef}
+          activeDuelSession={activeDuelSession}
+          devBridgeRef={import.meta.env.DEV ? devBridgeRef : undefined}
+          devRevision={devRevision}
+          pauseLoop={anyModalOpen}
+          hubTier={hubTier}
+          restoredWorlds={restoredWorlds}
+          highestUnlockedLevel={progress.highestUnlockedLevel}
+          activeQuestNpcIds={activeQuestNpcIds}
+          talkedNpcIds={progress.npcTalkedIds ?? []}
+          onHubAreaChanged={handleHubAreaChanged}
+          onHubInteract={handleHubInteract}
+          onHudSync={setHud}
+          onLevelComplete={handleLevelComplete}
+          onHeroAbilityActivated={handleHeroAbilityActivated}
+          onEchoCollected={handleEchoCollected}
+          onTogglePause={handleTogglePause}
+          onQuickRestart={handleQuickRestart}
+          onToggleMute={handleToggleMute}
+        />
+      )}
 
       {/* Ephemeral Notification Banner */}
       {toastBanner && (
@@ -1122,6 +1443,37 @@ export default function App() {
             audioEngine.playUiClick();
             setShowSettings(true);
           }}
+          onOpenWorldForge={() => {
+            audioEngine.playUiClick();
+            setForgeDraftState((prev) => prev ?? createInitialForgeState());
+            setScreenState('forge');
+          }}
+          onOpenFoundry={() => {
+            audioEngine.playUiClick();
+            setShowFoundry(true);
+          }}
+          onOpenDailyRift={() => {
+            audioEngine.playUiClick();
+            setShowDailyRift(true);
+          }}
+          onOpenEchoDuels={() => {
+            audioEngine.playUiClick();
+            setShowEchoDuels(true);
+          }}
+        />
+      )}
+
+      {/* World Forge Full-Screen 3D Editor */}
+      {screenState === 'forge' && (
+        <WorldForgeEditor
+          initialState={forgeDraftState}
+          onSaveStage={(stage, nextState) => {
+            setForgeDraftState(nextState);
+            commitProgress((prev) => saveCustomStageInProgress(prev, stage));
+            showToast(`Saved "${stage.title}" to Community Foundry.`);
+          }}
+          onTestPlay={(draft) => launchForgePlaytest(draft)}
+          onExit={() => setScreenState('title')}
         />
       )}
 
@@ -1141,6 +1493,25 @@ export default function App() {
           trackedQuest={trackedQuestBanner}
           saveStatus={saveStatus}
           activePlayerTitle={progress.activeTitle}
+          activeMode={activeMode}
+          riftChallengeCode={activeRiftSpec?.challengeCode}
+          duelCreatorAlias={activeDuelSession?.creatorAlias}
+          duelCreatorTime={activeDuelSession?.creatorTime}
+          echoControlRef={echoControlRef}
+          companionHeroId={activeCompanionHeroId}
+          onSelectCompanionHero={(hero2) => {
+            commitProgress((prev) => setActivePartyCompanionInProgress(prev, hero2));
+          }}
+          onSwapPartyHero={() => {
+            window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Tab' }));
+          }}
+          onToggleCompanionHold={() => {
+            window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyH' }));
+          }}
+          onReturnToForge={() => {
+            audioEngine.playUiClick();
+            setScreenState('forge');
+          }}
           onOpenJournal={() => {
             audioEngine.playUiClick();
             setShowJournal(true);
@@ -1162,6 +1533,11 @@ export default function App() {
         <PauseModal
           level={sceneLevel}
           isHubMode={pausedFromScreenRef.current === 'hub'}
+          activeMode={activeMode}
+          onReturnToForge={() => {
+            audioEngine.playUiClick();
+            setScreenState('forge');
+          }}
           onResume={() => {
             audioEngine.playUiClick();
             setScreenState(pausedFromScreenRef.current);
@@ -1198,9 +1574,10 @@ export default function App() {
           }}
           onReturnTitle={() => {
             audioEngine.playUiClick();
-            if (pausedFromScreenRef.current === 'playing') {
+            if (pausedFromScreenRef.current === 'playing' && activeMode === 'campaign') {
               persistActiveStageCheckpoint('checkpoint_saved');
             }
+            setActiveMode('campaign');
             resetLevelEntities(currentLevelId);
             setScreenState('title');
           }}
@@ -1210,9 +1587,16 @@ export default function App() {
       {/* Victory / Crystal Restored Modal */}
       {screenState === 'gameover' && completionSummary && !anyModalOpen && (
         <VictoryModal
-          level={currentLevel}
+          level={sceneLevel}
           summary={completionSummary}
-          hasNextLevel={currentLevelId < LEVELS.length}
+          hasNextLevel={activeMode === 'campaign' && currentLevelId < LEVELS.length}
+          activeMode={activeMode}
+          duelResult={lastDuelRecord}
+          lastRunReplay={lastRunReplay}
+          onReturnToForge={() => {
+            audioEngine.playUiClick();
+            setScreenState('forge');
+          }}
           onContinue={handleVictoryContinue}
           onReplay={handleQuickRestart}
           onOpenLevels={() => {
@@ -1222,6 +1606,7 @@ export default function App() {
           onOpenWardrobe={(cosmeticId) => handleOpenWardrobe(cosmeticId)}
           onReturnTitle={() => {
             audioEngine.playUiClick();
+            setActiveMode('campaign');
             resetLevelEntities(currentLevelId);
             setScreenState('title');
           }}
@@ -1360,6 +1745,71 @@ export default function App() {
           onClose={() => {
             audioEngine.playUiClick();
             setShowSettings(false);
+          }}
+        />
+      )}
+
+      {/* Community Foundry Browser */}
+      {showFoundry && (
+        <CommunityFoundryModal
+          progress={progress}
+          onPlayCustomStage={(stage) => launchCustomStage(stage, 'custom')}
+          onEditInForge={(stage) => {
+            setShowFoundry(false);
+            setForgeDraftState(createInitialForgeState(stage));
+            setScreenState('forge');
+          }}
+          onOpenNewForge={() => {
+            setShowFoundry(false);
+            setForgeDraftState(createInitialForgeState());
+            setScreenState('forge');
+          }}
+          onStartDuel={(stage, replay) => launchCustomStage(stage, 'duel', replay)}
+          onToggleFavorite={(stageId) =>
+            commitProgress((prev) => toggleFavoriteStageInProgress(prev, stageId))
+          }
+          onImportStage={(stage) =>
+            commitProgress((prev) => saveCustomStageInProgress(prev, stage))
+          }
+          onImportPack={(pack: LumaStagePackFile) =>
+            commitProgress((prev) => saveImportedPackInProgress(prev, pack))
+          }
+          onImportReplay={(replay) =>
+            commitProgress((prev) => saveReplayInProgress(prev, replay))
+          }
+          onDeleteCustomStage={(stageId) =>
+            commitProgress((prev) => deleteCustomStageInProgress(prev, stageId))
+          }
+          onClose={() => {
+            audioEngine.playUiClick();
+            setShowFoundry(false);
+          }}
+        />
+      )}
+
+      {/* Daily Rift Modal */}
+      {showDailyRift && (
+        <DailyRiftModal
+          progress={progress}
+          onStartRift={(spec) => launchDailyRift(spec)}
+          onClose={() => {
+            audioEngine.playUiClick();
+            setShowDailyRift(false);
+          }}
+        />
+      )}
+
+      {/* Echo Duels Modal */}
+      {showEchoDuels && (
+        <EchoDuelsModal
+          progress={progress}
+          onStartDuel={(stage, replay) => launchCustomStage(stage, 'duel', replay)}
+          onImportReplay={(replay) =>
+            commitProgress((prev) => saveReplayInProgress(prev, replay))
+          }
+          onClose={() => {
+            audioEngine.playUiClick();
+            setShowEchoDuels(false);
           }}
         />
       )}

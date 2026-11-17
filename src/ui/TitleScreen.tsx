@@ -25,6 +25,10 @@ interface TitleScreenProps {
   onOpenWardrobe: () => void;
   onOpenRewards: () => void;
   onOpenSettings: () => void;
+  onOpenWorldForge: () => void;
+  onOpenFoundry: () => void;
+  onOpenDailyRift: () => void;
+  onOpenEchoDuels: () => void;
 }
 
 export const TitleScreen: React.FC<TitleScreenProps> = ({
@@ -47,6 +51,10 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onOpenWardrobe,
   onOpenRewards,
   onOpenSettings,
+  onOpenWorldForge,
+  onOpenFoundry,
+  onOpenDailyRift,
+  onOpenEchoDuels,
 }) => {
   const activeHero = getCharacterById(activeCharacterId);
 
@@ -62,9 +70,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   }, [onStart]);
 
   return (
-    <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-6 sm:p-10">
+    <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-5 sm:p-8">
       {/* Top-Left Negative Space Title Lockup & Primary Actions */}
-      <div className="max-w-md pointer-events-auto flex flex-col items-start gap-3 pt-1 sm:pt-3">
+      <div className="max-w-md pointer-events-auto flex flex-col items-start gap-2.5 pt-1 sm:pt-2 max-h-[84vh] overflow-y-auto pr-1">
         <LumaTitleEmblem />
 
         <div className="pl-2 flex flex-col gap-0.5 text-xs font-extrabold uppercase tracking-[0.12em] text-[#1c2b35] tabular-nums">
@@ -93,7 +101,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               e.currentTarget.blur();
               onStart();
             }}
-            className="w-full px-5 py-3 rounded-lg bg-[#e8a838] hover:bg-[#f0b74f] active:translate-y-0.5 text-[#1b2730] font-bold tracking-wider uppercase text-sm border-2 border-[#1f2d38] shadow-[0_4px_0_#1f2d38] transition-transform cursor-pointer text-left flex items-center justify-between"
+            className="w-full px-5 py-2.5 rounded-lg bg-[#e8a838] hover:bg-[#f0b74f] active:translate-y-0.5 text-[#1b2730] font-bold tracking-wider uppercase text-sm border-2 border-[#1f2d38] shadow-[0_4px_0_#1f2d38] transition-transform cursor-pointer text-left flex items-center justify-between"
           >
             <span>
               {hasActiveCheckpoint
@@ -114,13 +122,61 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               e.currentTarget.blur();
               onEnterHub();
             }}
-            className="w-full px-5 py-2.5 rounded-lg bg-[#24c9b8] hover:bg-[#35dbca] active:translate-y-0.5 text-[#112329] font-extrabold tracking-wider uppercase text-xs border-2 border-[#1f2d38] shadow-[0_3px_0_#1f2d38] transition-transform cursor-pointer text-left flex items-center justify-between"
+            className="w-full px-5 py-2 rounded-lg bg-[#24c9b8] hover:bg-[#35dbca] active:translate-y-0.5 text-[#112329] font-extrabold tracking-wider uppercase text-xs border-2 border-[#1f2d38] shadow-[0_3px_0_#1f2d38] transition-transform cursor-pointer text-left flex items-center justify-between"
           >
             <span>Enter The Convergence (Hub)</span>
             <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-[#112329] text-[#aef7f2]">
               SANCTUARY
             </span>
           </button>
+
+          {/* Unbound Modes Row */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              data-testid="title-forge-btn"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onOpenWorldForge();
+              }}
+              className="px-2.5 py-2 rounded-lg bg-[#1d2d37] hover:bg-[#273d4a] text-[#ebb652] font-extrabold text-xs border-2 border-[#141e25] shadow-[0_3px_0_#111b21] transition-transform active:translate-y-0.5 whitespace-nowrap cursor-pointer"
+            >
+              World Forge
+            </button>
+            <button
+              type="button"
+              data-testid="title-foundry-btn"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onOpenFoundry();
+              }}
+              className="px-2.5 py-2 rounded-lg bg-[#1d2d37] hover:bg-[#273d4a] text-[#66e6d5] font-extrabold text-xs border-2 border-[#141e25] shadow-[0_3px_0_#111b21] transition-transform active:translate-y-0.5 whitespace-nowrap cursor-pointer"
+            >
+              Foundry
+            </button>
+            <button
+              type="button"
+              data-testid="title-daily-rift-btn"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onOpenDailyRift();
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-[#f6eedb]/95 hover:bg-[#fff8e8] text-[#178a80] font-bold text-xs border-2 border-[#253542] shadow-[0_3px_0_#253542] transition-transform active:translate-y-0.5 whitespace-nowrap cursor-pointer"
+            >
+              Daily Rift
+            </button>
+            <button
+              type="button"
+              data-testid="title-echo-duels-btn"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onOpenEchoDuels();
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-[#f6eedb]/95 hover:bg-[#fff8e8] text-[#9b6a24] font-bold text-xs border-2 border-[#253542] shadow-[0_3px_0_#253542] transition-transform active:translate-y-0.5 whitespace-nowrap cursor-pointer"
+            >
+              Echo Duels
+            </button>
+          </div>
 
           <div className="grid grid-cols-3 gap-2">
             <button

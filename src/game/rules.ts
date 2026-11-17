@@ -13,6 +13,8 @@ import {
   TileDef,
 } from './types';
 
+export const FIXED_SIM_DT = 1 / 30;
+
 export function dirToVec(dir: Direction): { dx: number; dz: number } {
   switch (dir) {
     case 0:
@@ -71,6 +73,17 @@ export function isGateOpen(level: LevelDef, state: PuzzleRuntimeState, gateId: s
     active = Boolean(state.switchStates[gate.linkedSwitchId]);
   } else if (gate.linkedSubCrystalId) {
     active = state.litSubCrystalIds.includes(gate.linkedSubCrystalId);
+  } else if (gate.linkedEchoPlateId) {
+    active = Boolean(state.echoPlateStates?.[gate.linkedEchoPlateId]);
+  } else if (gate.linkedSynergyId) {
+    active = Boolean(state.synergyNodesActive?.[gate.linkedSynergyId]);
+  } else {
+    const openingSynergy = (level.synergyNodes ?? []).find(
+      (sn) => sn.opensGateId === gateId && Boolean(state.synergyNodesActive?.[sn.id])
+    );
+    if (openingSynergy) {
+      active = true;
+    }
   }
   return gate.inverted ? !active : active;
 }
@@ -92,7 +105,7 @@ export interface SurfaceInfo {
   walkable: boolean;
   elevation: number;
   isStair: boolean;
-  source: 'tile' | 'rotating' | 'lift' | 'hero_bridge';
+  source: 'tile' | 'rotating' | 'lift' | 'hero_bridge' | 'synergy_bridge';
   id?: string;
 }
 
@@ -124,6 +137,20 @@ export function getSurfaceAtTile(
         isStair: false,
         source: 'hero_bridge',
         id: node.id,
+      };
+    }
+  }
+
+  for (const sn of level.synergyNodes ?? []) {
+    if (!state.synergyNodesActive?.[sn.id] || !sn.bridgeTiles) continue;
+    const bt = sn.bridgeTiles.find((t) => t.x === gx && t.z === gz);
+    if (bt) {
+      return {
+        walkable: true,
+        elevation: bt.elevation,
+        isStair: false,
+        source: 'synergy_bridge',
+        id: sn.id,
       };
     }
   }
@@ -394,6 +421,16 @@ export function createInitialPuzzleState(
     heroNodesActive[hn.id] = false;
   }
 
+  const echoPlateStates: Record<string, boolean> = {};
+  for (const ep of level.echoPlates ?? []) {
+    echoPlateStates[ep.id] = false;
+  }
+
+  const synergyNodesActive: Record<string, boolean> = {};
+  for (const sn of level.synergyNodes ?? []) {
+    synergyNodesActive[sn.id] = false;
+  }
+
   const baseState: PuzzleRuntimeState = {
     levelId: level.id,
     activeCharacterId,
@@ -402,6 +439,8 @@ export function createInitialPuzzleState(
     elevationHigh,
     prismDirections,
     heroNodesActive,
+    echoPlateStates,
+    synergyNodesActive,
     echoCollectedInRun: false,
     abilityCooldown: 0,
     abilityActiveTimer: 0,
@@ -798,6 +837,30 @@ export function findNearestInteraction(
     }
   }
 
+  for (const sn of level.synergyNodes ?? []) {
+    if (state.synergyNodesActive?.[sn.id]) continue;
+    const companionId = state.companionCharacterId ?? null;
+    const pairOk =
+      Boolean(companionId) &&
+      ((sn.heroA === state.activeCharacterId && sn.heroB === companionId) ||
+        (sn.heroB === state.activeCharacterId && sn.heroA === companionId));
+    if (!pairOk) continue;
+    const dist = checkDist(sn.x, sn.z);
+    const compDist = state.companionPos
+      ? Math.hypot(state.companionPos.x - sn.x * TILE_SIZE, state.companionPos.z - sn.z * TILE_SIZE)
+      : Infinity;
+    if (dist <= INTERACT_RANGE * 1.2 && compDist <= INTERACT_RANGE * 1.8) {
+      candidates.push({
+        kind: 'synergy_node',
+        id: sn.id,
+        prompt: `Synergy: ${sn.label}`,
+        worldX: sn.x * TILE_SIZE,
+        worldZ: sn.z * TILE_SIZE,
+        dist,
+      });
+    }
+  }
+
   if (level.echoFragment && !state.echoCollectedInRun) {
     const dist = checkDist(level.echoFragment.x, level.echoFragment.z);
     if (dist <= INTERACT_RANGE * 0.9) {
@@ -836,6 +899,7 @@ export function activateHeroAbility(
   const nextHeroNodes = { ...state.heroNodesActive };
   const activatedNodeIds: string[] = [];
   const nextElev = { ...state.elevationHigh };
+  const nextSynergy = { ...(state.synergyNodesActive ?? {}) };
 
   for (const hn of level.heroNodes ?? []) {
     if (hn.heroId !== state.activeCharacterId) continue;
@@ -849,9 +913,30 @@ export function activateHeroAbility(
     }
   }
 
+  for (const sn of level.synergyNodes ?? []) {
+    if (nextSynergy[sn.id]) continue;
+    const companionId = state.companionCharacterId ?? null;
+    const pairOk =
+      Boolean(companionId) &&
+      ((sn.heroA === state.activeCharacterId && sn.heroB === companionId) ||
+        (sn.heroB === state.activeCharacterId && sn.heroA === companionId));
+    if (!pairOk) continue;
+    const dist = Math.hypot(player.x - sn.x * TILE_SIZE, player.z - sn.z * TILE_SIZE);
+    const compDist = state.companionPos
+      ? Math.hypot(state.companionPos.x - sn.x * TILE_SIZE, state.companionPos.z - sn.z * TILE_SIZE)
+      : Infinity;
+    if (dist <= INTERACT_RANGE * 1.65 && compDist <= INTERACT_RANGE * 2.0) {
+      nextSynergy[sn.id] = true;
+      if (sn.boostsLiftId) {
+        nextElev[sn.boostsLiftId] = !nextElev[sn.boostsLiftId];
+      }
+    }
+  }
+
   const nextState = refreshDerivedPuzzleState(level, {
     ...state,
     heroNodesActive: nextHeroNodes,
+    synergyNodesActive: nextSynergy,
     elevationHigh: nextElev,
     abilityCooldown: 0.9,
     abilityActiveTimer: 2.6,
@@ -876,6 +961,17 @@ export function executeInteraction(
       next = {
         ...state,
         switchStates: { ...state.switchStates, [sw.id]: nextVal },
+        interactionsCount: state.interactionsCount + 1,
+      };
+      break;
+    }
+    case 'echo_plate': {
+      const ep = (level.echoPlates ?? []).find((p) => p.id === target.id);
+      if (!ep || ep.echoOnly) return state;
+      const cur = Boolean(state.echoPlateStates?.[ep.id]);
+      next = {
+        ...state,
+        echoPlateStates: { ...(state.echoPlateStates ?? {}), [ep.id]: !cur },
         interactionsCount: state.interactionsCount + 1,
       };
       break;
@@ -933,6 +1029,28 @@ export function executeInteraction(
       };
       break;
     }
+    case 'synergy_node': {
+      const sn = (level.synergyNodes ?? []).find((n) => n.id === target.id);
+      if (!sn) return state;
+      const companionId = state.companionCharacterId ?? null;
+      const pairOk =
+        Boolean(companionId) &&
+        ((sn.heroA === state.activeCharacterId && sn.heroB === companionId) ||
+          (sn.heroB === state.activeCharacterId && sn.heroA === companionId));
+      if (!pairOk) return state;
+      const nextElev = { ...state.elevationHigh };
+      if (sn.boostsLiftId) {
+        nextElev[sn.boostsLiftId] = !nextElev[sn.boostsLiftId];
+      }
+      next = {
+        ...state,
+        synergyNodesActive: { ...(state.synergyNodesActive ?? {}), [sn.id]: true },
+        elevationHigh: nextElev,
+        abilityActiveTimer: 2.6,
+        interactionsCount: state.interactionsCount + 1,
+      };
+      break;
+    }
     case 'echo': {
       next = {
         ...state,
@@ -952,4 +1070,68 @@ export function executeInteraction(
   }
 
   return refreshDerivedPuzzleState(level, next);
+}
+
+export interface PlateOccupant {
+  gx: number;
+  gz: number;
+  elevation?: number;
+  isEcho: boolean;
+  isCompanion?: boolean;
+}
+
+/**
+ * Deterministically evaluates Echo Plates and Companion/Echo occupancy on latched switches.
+ * Echo-only plates ONLY activate when at least one active Echo occupies that tile.
+ */
+export function updateOccupancyPlates(
+  level: LevelDef,
+  state: PuzzleRuntimeState,
+  occupants: PlateOccupant[]
+): { puzzleState: PuzzleRuntimeState; newlyPressedSwitches: string[]; newlyActiveEchoPlates: string[] } {
+  const plates = level.echoPlates ?? [];
+  const switches = level.pressureSwitches ?? [];
+  let changed = false;
+  const newlyPressedSwitches: string[] = [];
+  const newlyActiveEchoPlates: string[] = [];
+
+  const nextEchoPlates: Record<string, boolean> = { ...(state.echoPlateStates ?? {}) };
+  for (const plate of plates) {
+    const occupied = occupants.some((occ) => {
+      if (occ.gx !== plate.x || occ.gz !== plate.z) return false;
+      if (plate.echoOnly && !occ.isEcho) return false;
+      return true;
+    });
+    const prev = Boolean(nextEchoPlates[plate.id]);
+    if (occupied !== prev) {
+      nextEchoPlates[plate.id] = occupied;
+      changed = true;
+      if (occupied) {
+        newlyActiveEchoPlates.push(plate.id);
+      }
+    }
+  }
+
+  const nextSwitches: Record<string, boolean> = { ...state.switchStates };
+  for (const sw of switches) {
+    if (!sw.latch || nextSwitches[sw.id]) continue;
+    const occupied = occupants.some((occ) => occ.gx === sw.x && occ.gz === sw.z);
+    if (occupied) {
+      nextSwitches[sw.id] = true;
+      changed = true;
+      newlyPressedSwitches.push(sw.id);
+    }
+  }
+
+  if (!changed) {
+    return { puzzleState: state, newlyPressedSwitches, newlyActiveEchoPlates };
+  }
+
+  const updated = refreshDerivedPuzzleState(level, {
+    ...state,
+    echoPlateStates: nextEchoPlates,
+    switchStates: nextSwitches,
+  });
+
+  return { puzzleState: updated, newlyPressedSwitches, newlyActiveEchoPlates };
 }

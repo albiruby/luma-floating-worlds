@@ -1,8 +1,10 @@
 import React from 'react';
-import { getCharacterById } from '../game/characters';
+import { CHARACTERS, getCharacterById } from '../game/characters';
 import { CharacterId, LevelDef, SaveStatus } from '../game/types';
 import { getWorldForLevelId } from '../game/worlds';
-import { HudSyncSnapshot } from '../three/GameScene';
+import { EchoControlRuntime, HudSyncSnapshot } from '../three/GameScene';
+import { EchoTimelineBar } from './EchoTimelineBar';
+import { HeroPartyHud } from './HeroPartyHud';
 import {
   CrystalIcon,
   EchoIcon,
@@ -31,6 +33,16 @@ interface GameHudProps {
   } | null;
   saveStatus?: SaveStatus;
   activePlayerTitle?: string | null;
+  activeMode?: 'campaign' | 'custom' | 'playtest' | 'daily_rift' | 'duel';
+  riftChallengeCode?: string | null;
+  duelCreatorAlias?: string | null;
+  duelCreatorTime?: number | null;
+  echoControlRef?: React.MutableRefObject<EchoControlRuntime>;
+  companionHeroId?: CharacterId | null;
+  onSelectCompanionHero?: (heroId: CharacterId | null) => void;
+  onSwapPartyHero?: () => void;
+  onToggleCompanionHold?: () => void;
+  onReturnToForge?: () => void;
   onOpenJournal?: () => void;
   onOpenWorldMap?: () => void;
   onEnterHub?: () => void;
@@ -77,6 +89,16 @@ export const GameHud: React.FC<GameHudProps> = ({
   trackedQuest,
   saveStatus = 'saved',
   activePlayerTitle,
+  activeMode = 'campaign',
+  riftChallengeCode,
+  duelCreatorAlias,
+  duelCreatorTime,
+  echoControlRef,
+  companionHeroId = null,
+  onSelectCompanionHero,
+  onSwapPartyHero,
+  onToggleCompanionHold,
+  onReturnToForge,
   onOpenJournal,
   onOpenWorldMap,
   onEnterHub,
@@ -85,18 +107,35 @@ export const GameHud: React.FC<GameHudProps> = ({
   onRestart,
   onPause,
 }) => {
+  const [showCompanionPicker, setShowCompanionPicker] = React.useState(false);
+  const [, setEchoHudRev] = React.useState(0);
   const objective = isHubMode
     ? 'Explore The Convergence, converse with Keepers [E], or enter any Northern World Portal.'
     : hud.crystalRestored
     ? level.objectiveCrystalDone
     : level.objectiveDefault;
   const world = getWorldForLevelId(level.id);
-  const hero = getCharacterById(activeCharacterId);
+  const hero = getCharacterById(hud.activeHeroId ?? activeCharacterId);
   const hasEcho = !isHubMode && Boolean(level.echoFragment);
   const echoFound = hud.echoCollectedInRun || echoPreviouslyCollected;
   const onCooldown = hud.abilityCooldown > 0.05;
   const abilityActive = hud.abilityActiveTimer > 0.05;
   const saveBadge = formatSaveStatusText(saveStatus);
+  const activeCompanion = hud.companionHeroId ?? companionHeroId;
+  const showEchoBar = !isHubMode && Boolean(level.echoEnabled) && Boolean(echoControlRef);
+  const showPartyHud =
+    !isHubMode && (Boolean(level.partyEnabled) || Boolean(activeCompanion) || activeMode !== 'campaign');
+
+  const modeBadgeLabel =
+    activeMode === 'playtest'
+      ? 'WORLD FORGE · PLAYTEST (NO REWARDS)'
+      : activeMode === 'duel'
+      ? `ECHO DUEL VS ${(duelCreatorAlias ?? 'RIVAL').toUpperCase()}`
+      : activeMode === 'daily_rift'
+      ? `DAILY RIFT · ${riftChallengeCode ?? 'SEEDED'}`
+      : activeMode === 'custom'
+      ? `FOUNDRY · ${level.subtitle}`
+      : `W${world.order} · ${level.subtitle}`;
 
   return (
     <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-4 sm:p-6">
@@ -109,7 +148,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#ebb652] leading-snug">
                 {isHubMode
                   ? `THE CONVERGENCE · ${hubTierLabel}`
-                  : `W${world.order} · ${level.subtitle}`}
+                  : modeBadgeLabel}
               </span>
               {!isHubMode && (
                 <div className="flex items-center gap-2 text-xs font-bold tabular-nums text-[#cbe5ea] shrink-0">
@@ -121,6 +160,13 @@ export const GameHud: React.FC<GameHudProps> = ({
                 </div>
               )}
             </div>
+
+            {activeMode === 'duel' && duelCreatorTime != null && (
+              <div className="mb-1.5 rounded bg-[#14222b] border border-[#f59e0b]/70 px-2 py-1 text-[11px] font-bold text-[#fcd34d] tabular-nums flex justify-between">
+                <span>Rival Ghost ({duelCreatorAlias ?? 'Creator'})</span>
+                <span>Target {duelCreatorTime.toFixed(1)}s</span>
+              </div>
+            )}
 
             <div className="flex items-center gap-2.5">
               <CrystalIcon active={isHubMode || hud.crystalRestored} className="w-6 h-6 shrink-0" />
@@ -157,8 +203,69 @@ export const GameHud: React.FC<GameHudProps> = ({
             </div>
           </div>
 
+          {/* Unbound Party Synergy HUD */}
+          {showPartyHud && (
+            <HeroPartyHud
+              activeHeroId={hud.activeHeroId ?? activeCharacterId}
+              companionHeroId={activeCompanion}
+              companionHold={Boolean(hud.companionHoldPosition)}
+              onSwapHero={onSwapPartyHero}
+              onToggleHold={onToggleCompanionHold}
+              onOpenCompanionPicker={
+                onSelectCompanionHero ? () => setShowCompanionPicker((v) => !v) : undefined
+              }
+            />
+          )}
+
+          {showCompanionPicker && onSelectCompanionHero && (
+            <div className="rounded-lg bg-[#f6eedb] border-2 border-[#1f2d38] p-2.5 text-[#1f2d38] shadow-lg flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={() => {
+                  onSelectCompanionHero(null);
+                  setShowCompanionPicker(false);
+                }}
+                className={`px-2 py-1 rounded text-[11px] font-bold border cursor-pointer ${
+                  !activeCompanion ? 'bg-[#1d2d37] text-[#f6eedb] border-[#1f2d38]' : 'bg-[#efe6cf] border-[#253542]'
+                }`}
+              >
+                Solo (None)
+              </button>
+              {CHARACTERS.filter((c) => c.id !== (hud.activeHeroId ?? activeCharacterId)).map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  tabIndex={-1}
+                  onClick={() => {
+                    onSelectCompanionHero(c.id);
+                    setShowCompanionPicker(false);
+                  }}
+                  className={`px-2 py-1 rounded text-[11px] font-bold border cursor-pointer ${
+                    activeCompanion === c.id
+                      ? 'bg-[#24c9b8] text-[#112329] border-[#1f2d38]'
+                      : 'bg-[#efe6cf] hover:bg-[#fff8e6] border-[#253542]'
+                  }`}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Unbound Echo Engine Timeline Bar */}
+          {showEchoBar && echoControlRef && (
+            <EchoTimelineBar
+              hud={hud}
+              maxEchoes={level.maxEchoes ?? 2}
+              maxEchoSeconds={level.maxEchoSeconds ?? 12}
+              echoControlRef={echoControlRef}
+              onForceRefresh={() => setEchoHudRev((r) => r + 1)}
+            />
+          )}
+
           {/* Unobtrusive Active Tracked Quest Banner */}
-          {trackedQuest && (
+          {trackedQuest && activeMode === 'campaign' && (
             <button
               type="button"
               tabIndex={-1}
@@ -185,6 +292,21 @@ export const GameHud: React.FC<GameHudProps> = ({
 
         {/* Top-Right Compact Utility Controls + Truthful Local Save Badge */}
         <div className="pointer-events-auto self-end sm:self-auto shrink-0 flex flex-wrap items-center justify-end gap-2">
+          {activeMode === 'playtest' && onReturnToForge && (
+            <button
+              type="button"
+              tabIndex={-1}
+              data-testid="hud-return-forge-btn"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onReturnToForge();
+              }}
+              className="h-10 px-3 rounded-lg bg-[#e8a838] hover:bg-[#f0b74f] border-2 border-[#1f2d38] text-[#1f2d38] text-xs font-extrabold uppercase shadow-[0_3px_0_#111b21] active:translate-y-0.5 whitespace-nowrap cursor-pointer"
+            >
+              Back to Forge
+            </button>
+          )}
+
           <span
             data-testid="hud-save-status"
             className={`px-2.5 py-1 rounded-lg bg-[#1d2d37]/92 border border-[#324957] text-[11px] font-bold tracking-wide ${saveBadge.colorClass}`}
@@ -192,7 +314,7 @@ export const GameHud: React.FC<GameHudProps> = ({
             {saveBadge.label}
           </span>
 
-          {onOpenJournal && (
+          {onOpenJournal && activeMode === 'campaign' && (
             <button
               type="button"
               tabIndex={-1}
@@ -207,7 +329,7 @@ export const GameHud: React.FC<GameHudProps> = ({
             </button>
           )}
 
-          {onOpenWorldMap && (
+          {onOpenWorldMap && activeMode === 'campaign' && (
             <button
               type="button"
               tabIndex={-1}

@@ -21,9 +21,11 @@ import {
   clonePuzzleState,
   countPuzzleOverrides,
   forceCrystalState,
+  forceEchoPlateState,
   forceGateOverride,
   forceHeroNodeActive,
   forceSwitchState,
+  forceSynergyNodeState,
   resetPuzzleToInitial,
   setElevationPlatformState,
   setEmitterEnabled,
@@ -160,6 +162,7 @@ test('QA runner executes all core suites cleanly with zero failures', () => {
     'save-system',
     'mastery',
     'cosmetics',
+    'unbound',
     'full',
   ] as const;
 
@@ -202,3 +205,16 @@ test('QA runner executes all core suites cleanly with zero failures', () => {
     assert.ok(report.passed > 0, `Suite "${suite}" should have passing checks`);
   }
 });
+
+test('debugAdapter Unbound echoPlate and synergyNode overrides work via rules.ts', () => {
+  const l1 = getLevelById(1);
+  let s = createInitialPuzzleState(l1);
+  s = forceEchoPlateState(l1, s, 'ep_test', true);
+  s = forceSynergyNodeState(l1, s, 'syn_test', true);
+  const cloned = clonePuzzleState(s);
+  assert.equal(cloned.echoPlateStates?.['ep_test'], true);
+  assert.equal(cloned.synergyNodesActive?.['syn_test'], true);
+  cloned.echoPlateStates!['ep_test'] = false;
+  assert.equal(s.echoPlateStates?.['ep_test'], true);
+});
+

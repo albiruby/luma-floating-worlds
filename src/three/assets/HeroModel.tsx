@@ -11,6 +11,8 @@ interface HeroModelProps {
   palette: LumaMaterialPalette;
   isSoftwareGl: boolean;
   appearance?: WayfinderAppearance;
+  ghostStyle?: 'echo' | 'duel';
+  visibilityRef?: React.MutableRefObject<boolean>;
   onRegisterFrame: (cb: (dt: number, elapsed: number) => void) => () => void;
 }
 
@@ -23,6 +25,8 @@ export const HeroModel: React.FC<HeroModelProps> = ({
   palette,
   isSoftwareGl,
   appearance = DEFAULT_APPEARANCE,
+  ghostStyle,
+  visibilityRef,
   onRegisterFrame,
 }) => {
   const rootRef = useRef<THREE.Group>(null);
@@ -169,15 +173,74 @@ export const HeroModel: React.FC<HeroModelProps> = ({
   }, [palette.contactShadowTex]);
 
   useEffect(() => {
+    if (ghostStyle === 'echo') {
+      const applyEcho = (m: THREE.MeshStandardMaterial, hex: number, em: number, op = 0.56) => {
+        m.color.setHex(hex);
+        m.emissive.setHex(em);
+        m.emissiveIntensity = 0.72;
+        m.transparent = true;
+        m.opacity = op;
+        m.depthWrite = false;
+      };
+      applyEcho(cosmeticMats.cloak, 0x38bdf8, 0x0284c7, 0.54);
+      applyEcho(cosmeticMats.trim, 0x7dd3fc, 0x0ea5e9, 0.62);
+      applyEcho(cosmeticMats.tunic, 0x0ea5e9, 0x0369a1, 0.5);
+      applyEcho(cosmeticMats.skin, 0xbae6fd, 0x38bdf8, 0.58);
+      applyEcho(cosmeticMats.lanternCore, 0xe0f2fe, 0x38bdf8, 0.85);
+      applyEcho(cosmeticMats.lanternCage, 0x7dd3fc, 0x0284c7, 0.65);
+      cosmeticMats.shadow.opacity = 0.28;
+      cosmeticMats.eternalMote.color.setHex(0x7dd3fc);
+      return;
+    }
+    if (ghostStyle === 'duel') {
+      const applyDuel = (m: THREE.MeshStandardMaterial, hex: number, em: number, op = 0.5) => {
+        m.color.setHex(hex);
+        m.emissive.setHex(em);
+        m.emissiveIntensity = 0.75;
+        m.transparent = true;
+        m.opacity = op;
+        m.depthWrite = false;
+      };
+      applyDuel(cosmeticMats.cloak, 0xc084fc, 0x7e22ce, 0.52);
+      applyDuel(cosmeticMats.trim, 0xfbbf24, 0xd97706, 0.6);
+      applyDuel(cosmeticMats.tunic, 0xa855f7, 0x6b21a8, 0.48);
+      applyDuel(cosmeticMats.skin, 0xe9d5ff, 0xa855f7, 0.55);
+      applyDuel(cosmeticMats.lanternCore, 0xfef3c7, 0xf59e0b, 0.85);
+      applyDuel(cosmeticMats.lanternCage, 0xfde68a, 0xd97706, 0.62);
+      cosmeticMats.shadow.opacity = 0.24;
+      cosmeticMats.eternalMote.color.setHex(0xe879f9);
+      return;
+    }
+
     cosmeticMats.cloak.color.setHex(appearance.cloakColor);
+    cosmeticMats.cloak.emissive.setHex(0x000000);
+    cosmeticMats.cloak.transparent = false;
+    cosmeticMats.cloak.opacity = 1;
+    cosmeticMats.cloak.depthWrite = true;
     cosmeticMats.trim.color.setHex(appearance.cloakTrimColor);
+    cosmeticMats.trim.emissive.setHex(0x000000);
+    cosmeticMats.trim.transparent = false;
+    cosmeticMats.trim.opacity = 1;
+    cosmeticMats.trim.depthWrite = true;
     cosmeticMats.trim.metalness = appearance.hasCelestialTrim ? 0.55 : 0.08;
     cosmeticMats.trim.roughness = appearance.hasCelestialTrim ? 0.38 : 0.76;
     cosmeticMats.tunic.color.setHex(appearance.tunicColor);
+    cosmeticMats.tunic.emissive.setHex(0x000000);
+    cosmeticMats.tunic.transparent = false;
+    cosmeticMats.tunic.opacity = 1;
+    cosmeticMats.tunic.depthWrite = true;
     cosmeticMats.skin.color.setHex(appearance.skinColor);
+    cosmeticMats.skin.emissive.setHex(0x000000);
+    cosmeticMats.skin.transparent = false;
+    cosmeticMats.skin.opacity = 1;
+    cosmeticMats.skin.depthWrite = true;
     cosmeticMats.lanternCore.color.setHex(appearance.lanternCoreColor);
     cosmeticMats.lanternCore.emissive.setHex(appearance.lanternEmissiveColor);
     cosmeticMats.lanternCage.color.setHex(appearance.brassTintColor);
+    cosmeticMats.lanternCage.emissive.setHex(0x000000);
+    cosmeticMats.lanternCage.transparent = false;
+    cosmeticMats.lanternCage.opacity = 1;
+    cosmeticMats.shadow.opacity = 0.72;
     cosmeticMats.pulseRing.color.setHex(heroDef.defaultColors.toolEmissiveColor);
 
     const auraColors: Record<WayfinderAppearance['auraStyle'], number> = {
@@ -194,7 +257,7 @@ export const HeroModel: React.FC<HeroModelProps> = ({
     if (lanternLightRef.current) {
       lanternLightRef.current.color.setHex(appearance.lanternLightColor);
     }
-  }, [appearance, cosmeticMats, heroDef]);
+  }, [appearance, cosmeticMats, ghostStyle, heroDef]);
 
   useEffect(() => {
     return () => {
@@ -209,6 +272,11 @@ export const HeroModel: React.FC<HeroModelProps> = ({
       const root = rootRef.current;
       const body = bodyRef.current;
       if (!root || !body) return;
+
+      if (visibilityRef) {
+        root.visible = visibilityRef.current;
+        if (!root.visible) return;
+      }
 
       root.position.set(p.x, p.y, p.z);
 
@@ -281,7 +349,7 @@ export const HeroModel: React.FC<HeroModelProps> = ({
       }
 
       if (pulseRingRef.current) {
-        const timer = puzzleStateRef?.current.abilityActiveTimer ?? 0;
+        const timer = !ghostStyle ? puzzleStateRef?.current.abilityActiveTimer ?? 0 : 0;
         if (timer > 0) {
           const progress = 1 - Math.min(1, timer / 1.5);
           pulseRingRef.current.visible = true;
@@ -293,7 +361,7 @@ export const HeroModel: React.FC<HeroModelProps> = ({
         }
       }
     });
-  }, [appearance.auraStyle, appearance.characterId, cosmeticMats.pulseRing, onRegisterFrame, playerRef, puzzleStateRef]);
+  }, [appearance.auraStyle, appearance.characterId, cosmeticMats.pulseRing, ghostStyle, onRegisterFrame, playerRef, puzzleStateRef, visibilityRef]);
 
   const cid = appearance.characterId;
   const isArmored = cid === 'kael';
@@ -624,7 +692,7 @@ export const HeroModel: React.FC<HeroModelProps> = ({
               position={[0, -0.07, 0]}
               rotation={[Math.PI, 0, 0]}
             />
-            {!isSoftwareGl && (
+            {!isSoftwareGl && !ghostStyle && (
               <pointLight
                 ref={lanternLightRef}
                 color={appearance.lanternLightColor}

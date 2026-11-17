@@ -25,6 +25,9 @@ export function clonePuzzleState(state: PuzzleRuntimeState): PuzzleRuntimeState 
     litPrismIds: [...state.litPrismIds],
     litSubCrystalIds: [...state.litSubCrystalIds],
     heroNodesActive: { ...state.heroNodesActive },
+    echoPlateStates: state.echoPlateStates ? { ...state.echoPlateStates } : undefined,
+    synergyNodesActive: state.synergyNodesActive ? { ...state.synergyNodesActive } : undefined,
+    companionPos: state.companionPos ? { ...state.companionPos } : undefined,
     debugGateOverrides: state.debugGateOverrides ? { ...state.debugGateOverrides } : undefined,
     debugDisabledEmitters: state.debugDisabledEmitters
       ? { ...state.debugDisabledEmitters }
@@ -173,6 +176,38 @@ export function setPrismDirection(
     prismDirections: {
       ...state.prismDirections,
       [prismId]: direction,
+    },
+  };
+  return refreshDerivedPuzzleState(level, next);
+}
+
+export function forceEchoPlateState(
+  level: LevelDef,
+  state: PuzzleRuntimeState,
+  plateId: string,
+  active: boolean
+): PuzzleRuntimeState {
+  const next: PuzzleRuntimeState = {
+    ...state,
+    echoPlateStates: {
+      ...(state.echoPlateStates ?? {}),
+      [plateId]: active,
+    },
+  };
+  return refreshDerivedPuzzleState(level, next);
+}
+
+export function forceSynergyNodeState(
+  level: LevelDef,
+  state: PuzzleRuntimeState,
+  nodeId: string,
+  active: boolean
+): PuzzleRuntimeState {
+  const next: PuzzleRuntimeState = {
+    ...state,
+    synergyNodesActive: {
+      ...(state.synergyNodesActive ?? {}),
+      [nodeId]: active,
     },
   };
   return refreshDerivedPuzzleState(level, next);

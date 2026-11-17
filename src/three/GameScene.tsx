@@ -7,16 +7,37 @@ import type { DevRuntimeBridge } from '../dev/debugTypes';
 import { detectHubAreaAtPosition, HUB_AREAS, HUB_WORLD_PORTALS } from '../game/hubLayout';
 import { NPCS } from '../game/npcs';
 import { getWorldRestoredVisualBoost } from '../game/restoration';
-import {
-  activateHeroAbility,
-  executeInteraction,
-  findNearestInteraction,
-  stepPlayerMovement,
-} from '../game/rules';
 import { resolveWayfinderAppearance } from '../game/cosmetics';
+import {
+  clonePuzzleRuntime,
+  createEchoRecording,
+  ECHO_TICK_RATE,
+  MAX_REPLAY_TICKS,
+  screenAxesToWorldInput,
+  stepEchoSlotTick,
+} from '../game/echoEngine';
+import { ActiveDuelSession, sampleDuelGhostAtTime } from '../game/echoDuels';
+import {
+  CompanionRuntimeState,
+  createInitialCompanionState,
+  stepCompanionMovement,
+  swapActivePartyHero,
+} from '../game/synergy';
 import { getWorldForLevelId } from '../game/worlds';
 import {
+  activateHeroAbility,
+  createInitialPlayerState,
+  executeInteraction,
+  findNearestInteraction,
+  FIXED_SIM_DT,
+  stepPlayerMovement,
+  updateOccupancyPlates,
+} from '../game/rules';
+import {
   CharacterId,
+  EchoInputFrame,
+  EchoKeyEvent,
+  EchoRecording,
   ELEVATION_STEP,
   EquippedCosmetics,
   GameScreenState,
@@ -154,6 +175,34 @@ function findNearestHubInteraction(player: PlayerRuntimeState): HubInteractionTa
   return best;
 }
 
+export interface EchoHudSlotSummary {
+  slotIndex: number;
+  recorded: boolean;
+  durationSeconds: number;
+  offsetSeconds: number;
+  activeNow: boolean;
+  characterId?: CharacterId;
+}
+
+export interface EchoControlRuntime {
+  recordingSlot: number | null;
+  recordingTicks: number;
+  maxRecordingTicks: number;
+  isPlayingBack: boolean;
+  playbackTick: number;
+  slots: Array<EchoRecording | null>;
+  slotOffsets: [number, number, number];
+  anchorPlayer: PlayerRuntimeState | null;
+  anchorPuzzle: PuzzleRuntimeState | null;
+  pendingCommand:
+    | { type: 'toggle_record'; slotIndex: number }
+    | { type: 'toggle_playback' }
+    | { type: 'rewind_playback' }
+    | { type: 'clear_slot'; slotIndex: number }
+    | { type: 'set_offset'; slotIndex: number; offsetTicks: number }
+    | null;
+}
+
 export interface HudSyncSnapshot {
   interactPrompt: string | null;
   crystalRestored: boolean;
@@ -164,6 +213,17 @@ export interface HudSyncSnapshot {
   abilityActiveTimer: number;
   echoCollectedInRun: boolean;
   heroNodesActivatedCount: number;
+  // Unbound HUD state
+  echoRecordingSlot?: number | null;
+  echoRecordingProgress?: number;
+  echoPlayingBack?: boolean;
+  echoPlaybackSeconds?: number;
+  echoSlotSummaries?: EchoHudSlotSummary[];
+  activeHeroId?: CharacterId;
+  companionHeroId?: CharacterId | null;
+  companionHoldPosition?: boolean;
+  duelGhostTime?: number;
+  duelCreatorAlias?: string;
 }
 
 interface GameSceneProps {
@@ -172,10 +232,15 @@ interface GameSceneProps {
   cameraZoomOffset: number;
   equippedCosmetics: EquippedCosmetics;
   activeCharacterId?: CharacterId;
+  companionCharacterId?: CharacterId | null;
   abilityTriggerToken?: number;
   resetToken: number;
   puzzleStateRef: React.MutableRefObject<PuzzleRuntimeState>;
   playerRef: React.MutableRefObject<PlayerRuntimeState>;
+  echoControlRef?: React.MutableRefObject<EchoControlRuntime>;
+  replayFramesRef?: React.MutableRefObject<EchoInputFrame[]>;
+  replayKeyEventsRef?: React.MutableRefObject<EchoKeyEvent[]>;
+  activeDuelSession?: ActiveDuelSession | null;
   devBridgeRef?: React.MutableRefObject<DevRuntimeBridge | null>;
   devRevision?: number;
   pauseLoop?: boolean;
@@ -193,6 +258,7 @@ interface GameSceneProps {
   onTogglePause: () => void;
   onQuickRestart: () => void;
   onToggleMute: () => void;
+  onPartyChanged?: (activeId: CharacterId, companionId: CharacterId | null, hold: boolean) => void;
 }
 
 interface BurstParticle {
@@ -217,9 +283,15 @@ const SceneContent: React.FC<
   cameraZoomOffset,
   equippedCosmetics,
   activeCharacterId = 'wayfinder',
+  companionCharacterId = null,
   abilityTriggerToken = 0,
+  resetToken,
   puzzleStateRef,
   playerRef,
+  echoControlRef,
+  replayFramesRef,
+  replayKeyEventsRef,
+  activeDuelSession = null,
   devBridgeRef,
   devRevision = 0,
   pauseLoop = false,
@@ -237,6 +309,7 @@ const SceneContent: React.FC<
   onTogglePause,
   onQuickRestart,
   onToggleMute,
+  onPartyChanged,
   isSoftwareGl,
 }) => {
   const { gl, scene, camera, size } = useThree();
@@ -256,6 +329,79 @@ const SceneContent: React.FC<
     () => resolveWayfinderAppearance(equippedCosmetics, activeCharacterId),
     [activeCharacterId, equippedCosmetics]
   );
+  const companionAppearance = useMemo(
+    () =>
+      resolveWayfinderAppearance(
+        equippedCosmetics,
+        companionCharacterId ?? activeCharacterId
+      ),
+    [activeCharacterId, companionCharacterId, equippedCosmetics]
+  );
+
+  // Ghost, Echo, & Companion runtime refs (zero-remount updates)
+  const echo0PlayerRef = useRef<PlayerRuntimeState>(createInitialPlayerState(level));
+  const echo1PlayerRef = useRef<PlayerRuntimeState>(createInitialPlayerState(level));
+  const echo2PlayerRef = useRef<PlayerRuntimeState>(createInitialPlayerState(level));
+  const echo0VisRef = useRef(false);
+  const echo1VisRef = useRef(false);
+  const echo2VisRef = useRef(false);
+  const echoRecordingFramesRef = useRef<EchoInputFrame[]>([]);
+  const echoRecordingEventsRef = useRef<EchoKeyEvent[]>([]);
+
+  const companionRuntimeRef = useRef<CompanionRuntimeState>(
+    createInitialCompanionState(level, playerRef.current)
+  );
+  const companionPlayerViewRef = useRef<PlayerRuntimeState>({
+    ...createInitialPlayerState(level),
+    x: companionRuntimeRef.current.x,
+    y: companionRuntimeRef.current.y,
+    z: companionRuntimeRef.current.z,
+  });
+  const companionVisRef = useRef(false);
+
+  const duelGhostPlayerRef = useRef<PlayerRuntimeState>(createInitialPlayerState(level));
+  const duelGhostVisRef = useRef(false);
+  const activeDuelRef = useRef<ActiveDuelSession | null>(activeDuelSession);
+  activeDuelRef.current = activeDuelSession;
+
+  const companionHeroIdRef = useRef<CharacterId | null>(companionCharacterId);
+  companionHeroIdRef.current = companionCharacterId;
+
+  // Reset companion & echo actor positions when resetToken or level changes
+  useEffect(() => {
+    const compInit = createInitialCompanionState(level, playerRef.current);
+    companionRuntimeRef.current = compInit;
+    companionPlayerViewRef.current = {
+      ...createInitialPlayerState(level),
+      x: compInit.x,
+      y: compInit.y,
+      z: compInit.z,
+    };
+    const showComp =
+      !isHubMode &&
+      Boolean(companionCharacterId) &&
+      (Boolean(level.partyEnabled) || Boolean(companionCharacterId));
+    companionVisRef.current = showComp;
+    if (showComp && puzzleStateRef.current) {
+      puzzleStateRef.current.companionCharacterId = companionCharacterId;
+      puzzleStateRef.current.companionPos = {
+        x: compInit.x,
+        y: compInit.y,
+        z: compInit.z,
+        facingAngle: compInit.facingAngle,
+        isMoving: false,
+        walkCycle: 0,
+      };
+    }
+    echo0VisRef.current = false;
+    echo1VisRef.current = false;
+    echo2VisRef.current = false;
+    duelGhostVisRef.current = Boolean(activeDuelSession && !isHubMode);
+    echoRecordingFramesRef.current = [];
+    echoRecordingEventsRef.current = [];
+    simAccumulatorRef.current = 0;
+  }, [activeDuelSession, companionCharacterId, isHubMode, level, playerRef, puzzleStateRef, resetToken]);
+
   const interactionTargetRef = useRef<InteractionTarget | null>(null);
   const [hubHighlightPos, setHubHighlightPos] = React.useState<{ x: number; z: number } | null>(null);
   const lastHubHighlightKeyRef = useRef<string>('');
@@ -292,6 +438,7 @@ const SceneContent: React.FC<
     onToggleMute,
     onHubAreaChanged,
     onHubInteract,
+    onPartyChanged,
   });
   callbacksRef.current = {
     onHudSync,
@@ -303,11 +450,13 @@ const SceneContent: React.FC<
     onToggleMute,
     onHubAreaChanged,
     onHubInteract,
+    onPartyChanged,
   };
 
   const heldKeysRef = useRef<Set<string>>(new Set());
   const justPressedRef = useRef<Set<string>>(new Set());
   const footstepTimerRef = useRef(0);
+  const simAccumulatorRef = useRef(0);
   const camTargetRef = useRef(new THREE.Vector3(level.cameraCenter.x * TILE_SIZE, 0, level.cameraCenter.z * TILE_SIZE));
   const camOffsetRef = useRef(new THREE.Vector3(18, 15.5, 18));
   const lastHudSentRef = useRef<string>('');
@@ -432,7 +581,7 @@ const SceneContent: React.FC<
       if (isTypingTarget(e.target)) {
         return;
       }
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab'].includes(e.code)) {
         e.preventDefault();
       }
       if (!heldKeysRef.current.has(e.code)) {
@@ -726,46 +875,433 @@ const SceneContent: React.FC<
           setHubHighlightPos(null);
         }
         const wasCompleted = puzzleStateRef.current.completed;
-        if (!god?.freezeTimer) {
-          puzzleStateRef.current = {
-            ...puzzleStateRef.current,
-            elapsedSeconds: puzzleStateRef.current.elapsedSeconds + dt,
-          };
+        const echoCtrl = echoControlRef?.current;
+
+        // Process pending Echo HUD commands or [F] Record hotkey
+        if (echoCtrl && curLevel.echoEnabled) {
+          if (justPressedRef.current.has('KeyF')) {
+            const targetSlot = echoCtrl.recordingSlot ?? 0;
+            echoCtrl.pendingCommand = { type: 'toggle_record', slotIndex: targetSlot };
+          }
+          const cmd = echoCtrl.pendingCommand;
+          if (cmd) {
+            echoCtrl.pendingCommand = null;
+            if (cmd.type === 'toggle_record') {
+              const slotIdx = cmd.slotIndex;
+              if (echoCtrl.recordingSlot === slotIdx) {
+                // Finish recording -> save recording & rewind to Echo Anchor with playback active
+                const rec = createEchoRecording(
+                  slotIdx,
+                  puzzleStateRef.current.activeCharacterId,
+                  echoRecordingFramesRef.current,
+                  echoRecordingEventsRef.current,
+                  echoCtrl.slotOffsets[slotIdx] ?? 0
+                );
+                echoCtrl.slots[slotIdx] = rec;
+                echoCtrl.recordingSlot = null;
+                echoCtrl.recordingTicks = 0;
+                if (echoCtrl.anchorPlayer && echoCtrl.anchorPuzzle) {
+                  playerRef.current = { ...echoCtrl.anchorPlayer };
+                  puzzleStateRef.current = clonePuzzleRuntime(echoCtrl.anchorPuzzle);
+                }
+                echoCtrl.isPlayingBack = true;
+                echoCtrl.playbackTick = 0;
+                if (echoCtrl.anchorPlayer) {
+                  echo0PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                  echo1PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                  echo2PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                }
+                audioEngine.playHeroAbility('wayfinder');
+              } else {
+                // Start recording on slotIdx -> capture Anchor Snapshot
+                echoCtrl.anchorPlayer = { ...playerRef.current };
+                echoCtrl.anchorPuzzle = clonePuzzleRuntime(puzzleStateRef.current);
+                echoCtrl.recordingSlot = slotIdx;
+                echoCtrl.recordingTicks = 0;
+                echoCtrl.isPlayingBack = false;
+                echoRecordingFramesRef.current = [];
+                echoRecordingEventsRef.current = [];
+                audioEngine.playUiClick();
+              }
+            } else if (cmd.type === 'toggle_playback') {
+              echoCtrl.isPlayingBack = !echoCtrl.isPlayingBack;
+              if (echoCtrl.isPlayingBack && echoCtrl.playbackTick === 0 && echoCtrl.anchorPlayer) {
+                echo0PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                echo1PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                echo2PlayerRef.current = { ...echoCtrl.anchorPlayer };
+              }
+            } else if (cmd.type === 'rewind_playback') {
+              if (echoCtrl.anchorPlayer && echoCtrl.anchorPuzzle) {
+                playerRef.current = { ...echoCtrl.anchorPlayer };
+                puzzleStateRef.current = clonePuzzleRuntime(echoCtrl.anchorPuzzle);
+              }
+              echoCtrl.playbackTick = 0;
+              echoCtrl.isPlayingBack = true;
+              if (echoCtrl.anchorPlayer) {
+                echo0PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                echo1PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                echo2PlayerRef.current = { ...echoCtrl.anchorPlayer };
+              }
+            } else if (cmd.type === 'clear_slot') {
+              echoCtrl.slots[cmd.slotIndex] = null;
+              if (cmd.slotIndex === 0) echo0VisRef.current = false;
+              if (cmd.slotIndex === 1) echo1VisRef.current = false;
+              if (cmd.slotIndex === 2) echo2VisRef.current = false;
+            } else if (cmd.type === 'set_offset') {
+              echoCtrl.slotOffsets[cmd.slotIndex] = cmd.offsetTicks;
+              const existing = echoCtrl.slots[cmd.slotIndex];
+              if (existing) {
+                existing.timeOffsetTicks = cmd.offsetTicks;
+              }
+            }
+          }
         }
 
+        // Hero Synergy: [Tab] Swap Hero, [H] Toggle Companion Hold/Follow
+        if (puzzleStateRef.current.companionCharacterId) {
+          if (justPressedRef.current.has('Tab')) {
+            const swapped = swapActivePartyHero(
+              puzzleStateRef.current,
+              playerRef.current,
+              companionRuntimeRef.current
+            );
+            puzzleStateRef.current = swapped.puzzleState;
+            playerRef.current = swapped.player;
+            companionRuntimeRef.current = swapped.companion;
+            audioEngine.playUiClick();
+            spawnBurst(playerRef.current.x, playerRef.current.y + 0.8, playerRef.current.z, 10);
+            callbacksRef.current.onPartyChanged?.(
+              puzzleStateRef.current.activeCharacterId,
+              puzzleStateRef.current.companionCharacterId ?? null,
+              Boolean(puzzleStateRef.current.companionHoldPosition)
+            );
+          }
+          if (justPressedRef.current.has('KeyH')) {
+            const nextHold = !puzzleStateRef.current.companionHoldPosition;
+            puzzleStateRef.current = {
+              ...puzzleStateRef.current,
+              companionHoldPosition: nextHold,
+            };
+            audioEngine.playSwitch();
+            callbacksRef.current.onPartyChanged?.(
+              puzzleStateRef.current.activeCharacterId,
+              puzzleStateRef.current.companionCharacterId ?? null,
+              nextHold
+            );
+          }
+        }
+
+        // Gather discrete inputs for Fixed-Timestep 30 Hz simulation
         const held = heldKeysRef.current;
-        let screenUp = 0;
         let screenRight = 0;
-        if (held.has('KeyW') || held.has('ArrowUp')) screenUp += 1;
-        if (held.has('KeyS') || held.has('ArrowDown')) screenUp -= 1;
+        let screenUp = 0;
         if (held.has('KeyD') || held.has('ArrowRight')) screenRight += 1;
         if (held.has('KeyA') || held.has('ArrowLeft')) screenRight -= 1;
+        if (held.has('KeyW') || held.has('ArrowUp')) screenUp += 1;
+        if (held.has('KeyS') || held.has('ArrowDown')) screenUp -= 1;
+        const moveX = (screenRight > 0 ? 1 : screenRight < 0 ? -1 : 0) as -1 | 0 | 1;
+        const moveZ = (screenUp > 0 ? 1 : screenUp < 0 ? -1 : 0) as -1 | 0 | 1;
+        const { inputX, inputZ } = screenAxesToWorldInput(moveX, moveZ);
 
-        const inputX = screenRight - screenUp;
-        const inputZ = -screenRight - screenUp;
+        let wantAbility =
+          justPressedRef.current.has('KeyQ') || pendingAbilityFromHudRef.current;
+        pendingAbilityFromHudRef.current = false;
+        let wantInteract =
+          justPressedRef.current.has('KeyE') || justPressedRef.current.has('Space');
 
-        const moveRes = stepPlayerMovement(
-          curLevel,
-          puzzleStateRef.current,
-          playerRef.current,
-          inputX,
-          inputZ,
-          dt,
-          god
-            ? {
-                noClip: god.noClip,
-                freeMovement: god.freeMovement,
-                flyMode: god.flyMode,
-                flyOffsetY: god.flyOffsetY,
-                speedMultiplier: god.speedMultiplier,
+        // Run fixed-step accumulator (30 Hz deterministic simulation)
+        simAccumulatorRef.current = Math.min(simAccumulatorRef.current + dt, FIXED_SIM_DT * 3);
+        let steppedOnce = false;
+
+        while (simAccumulatorRef.current >= FIXED_SIM_DT && !puzzleStateRef.current.completed) {
+          simAccumulatorRef.current -= FIXED_SIM_DT;
+          steppedOnce = true;
+
+          if (!god?.freezeTimer) {
+            puzzleStateRef.current = {
+              ...puzzleStateRef.current,
+              elapsedSeconds: puzzleStateRef.current.elapsedSeconds + FIXED_SIM_DT,
+            };
+          }
+
+          // Record full-stage replay frame for Echo Duels
+          if (replayFramesRef && replayFramesRef.current.length < MAX_REPLAY_TICKS) {
+            replayFramesRef.current.push({
+              tick: replayFramesRef.current.length,
+              moveX,
+              moveZ,
+              interact: wantInteract || undefined,
+              ability: wantAbility || undefined,
+            });
+          }
+
+          // Record Echo Engine slot frame if actively recording
+          if (echoCtrl && echoCtrl.recordingSlot !== null) {
+            echoRecordingFramesRef.current.push({
+              tick: echoCtrl.recordingTicks,
+              moveX,
+              moveZ,
+              interact: wantInteract || undefined,
+            });
+            echoCtrl.recordingTicks++;
+            if (echoCtrl.recordingTicks >= echoCtrl.maxRecordingTicks) {
+              // Auto-complete recording and rewind to Echo Anchor
+              const sIdx = echoCtrl.recordingSlot;
+              echoCtrl.slots[sIdx] = createEchoRecording(
+                sIdx,
+                puzzleStateRef.current.activeCharacterId,
+                echoRecordingFramesRef.current,
+                echoRecordingEventsRef.current,
+                echoCtrl.slotOffsets[sIdx] ?? 0
+              );
+              echoCtrl.recordingSlot = null;
+              echoCtrl.recordingTicks = 0;
+              if (echoCtrl.anchorPlayer && echoCtrl.anchorPuzzle) {
+                playerRef.current = { ...echoCtrl.anchorPlayer };
+                puzzleStateRef.current = clonePuzzleRuntime(echoCtrl.anchorPuzzle);
+                echo0PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                echo1PlayerRef.current = { ...echoCtrl.anchorPlayer };
+                echo2PlayerRef.current = { ...echoCtrl.anchorPlayer };
               }
-            : undefined
-        );
+              echoCtrl.isPlayingBack = true;
+              echoCtrl.playbackTick = 0;
+              audioEngine.playHeroAbility('wayfinder');
+              break;
+            }
+          }
 
-        playerRef.current = moveRes.player;
-        puzzleStateRef.current = moveRes.puzzleState;
+          // Step Player
+          const moveRes = stepPlayerMovement(
+            curLevel,
+            puzzleStateRef.current,
+            playerRef.current,
+            inputX,
+            inputZ,
+            FIXED_SIM_DT,
+            god
+              ? {
+                  noClip: god.noClip,
+                  freeMovement: god.freeMovement,
+                  flyMode: god.flyMode,
+                  flyOffsetY: god.flyOffsetY,
+                  speedMultiplier: god.speedMultiplier,
+                }
+              : undefined
+          );
+          playerRef.current = moveRes.player;
+          puzzleStateRef.current = moveRes.puzzleState;
 
-        if (moveRes.player.isMoving) {
+          if (moveRes.triggeredSwitchId) {
+            audioEngine.playSwitch();
+            const sw = curLevel.pressureSwitches.find((s) => s.id === moveRes.triggeredSwitchId);
+            if (sw) {
+              spawnBurst(sw.x * TILE_SIZE, sw.elevation * ELEVATION_STEP + 0.35, sw.z * TILE_SIZE, 14);
+            }
+          }
+          if (moveRes.collectedEchoId) {
+            audioEngine.playEchoCollect();
+            spawnBurst(playerRef.current.x, playerRef.current.y + 0.8, playerRef.current.z, 20);
+            callbacksRef.current.onEchoCollected?.(moveRes.collectedEchoId);
+          }
+
+          // Step Companion Hero
+          const compId = puzzleStateRef.current.companionCharacterId;
+          if (compId) {
+            const nextComp = stepCompanionMovement(
+              curLevel,
+              puzzleStateRef.current,
+              playerRef.current,
+              companionRuntimeRef.current,
+              FIXED_SIM_DT,
+              Boolean(puzzleStateRef.current.companionHoldPosition)
+            );
+            companionRuntimeRef.current = nextComp;
+            companionPlayerViewRef.current = {
+              x: nextComp.x,
+              y: nextComp.y,
+              z: nextComp.z,
+              vx: 0,
+              vz: 0,
+              facingAngle: nextComp.facingAngle,
+              isMoving: nextComp.isMoving,
+              walkCycle: nextComp.walkCycle,
+              interactTimer: 0,
+              lastStepTileKey: nextComp.lastStepTileKey,
+            };
+            companionVisRef.current = true;
+            puzzleStateRef.current.companionPos = {
+              x: nextComp.x,
+              y: nextComp.y,
+              z: nextComp.z,
+              facingAngle: nextComp.facingAngle,
+              isMoving: nextComp.isMoving,
+              walkCycle: nextComp.walkCycle,
+            };
+          } else {
+            companionVisRef.current = false;
+          }
+
+          // Step Active Echo Playback Slots (up to 3 simultaneous Echoes)
+          const occupants = [
+            {
+              gx: Math.round(playerRef.current.x / TILE_SIZE),
+              gz: Math.round(playerRef.current.z / TILE_SIZE),
+              isEcho: false,
+            },
+          ];
+          if (compId) {
+            occupants.push({
+              gx: Math.round(companionRuntimeRef.current.x / TILE_SIZE),
+              gz: Math.round(companionRuntimeRef.current.z / TILE_SIZE),
+              isEcho: false,
+            });
+          }
+
+          if (echoCtrl && echoCtrl.isPlayingBack) {
+            const echoActorRefs = [echo0PlayerRef, echo1PlayerRef, echo2PlayerRef];
+            const echoVisRefs = [echo0VisRef, echo1VisRef, echo2VisRef];
+            for (let sIdx = 0; sIdx < 3; sIdx++) {
+              const rec = echoCtrl.slots[sIdx];
+              if (!rec) {
+                echoVisRefs[sIdx].current = false;
+                continue;
+              }
+              const res = stepEchoSlotTick(
+                curLevel,
+                puzzleStateRef.current,
+                rec,
+                echoActorRefs[sIdx].current,
+                echoCtrl.playbackTick
+              );
+              echoActorRefs[sIdx].current = res.actor;
+              puzzleStateRef.current = res.puzzleState;
+              echoVisRefs[sIdx].current = res.active;
+              if (res.active) {
+                occupants.push({
+                  gx: Math.round(res.actor.x / TILE_SIZE),
+                  gz: Math.round(res.actor.z / TILE_SIZE),
+                  isEcho: true,
+                });
+              }
+            }
+            echoCtrl.playbackTick++;
+          } else {
+            echo0VisRef.current = false;
+            echo1VisRef.current = false;
+            echo2VisRef.current = false;
+          }
+
+          // Evaluate Echo Plates & Companion/Echo switch occupancy
+          const occRes = updateOccupancyPlates(curLevel, puzzleStateRef.current, occupants);
+          puzzleStateRef.current = occRes.puzzleState;
+          if (occRes.newlyPressedSwitches.length > 0 || occRes.newlyActiveEchoPlates.length > 0) {
+            audioEngine.playSwitch();
+          }
+
+          // Hero Ability [Q]
+          if (wantAbility) {
+            wantAbility = false;
+            const abilityRes = activateHeroAbility(curLevel, puzzleStateRef.current, playerRef.current);
+            if (abilityRes.pulsed) {
+              puzzleStateRef.current = abilityRes.puzzleState;
+              audioEngine.playHeroAbility(puzzleStateRef.current.activeCharacterId);
+              spawnBurst(playerRef.current.x, playerRef.current.y + 0.75, playerRef.current.z, 18);
+              const bonusShards = (curLevel.heroNodes ?? [])
+                .filter((hn) => abilityRes.activatedNodeIds.includes(hn.id))
+                .reduce((acc, hn) => acc + (hn.bonusShards ?? 0), 0);
+              callbacksRef.current.onHeroAbilityActivated?.(abilityRes.activatedNodeIds, bonusShards);
+            }
+          }
+
+          // Interaction [E / Space]
+          const target = findNearestInteraction(curLevel, puzzleStateRef.current, playerRef.current);
+          interactionTargetRef.current = target;
+          if (wantInteract && target) {
+            wantInteract = false;
+            const prevCrystal = puzzleStateRef.current.crystalRestored;
+            const prevHeroActive = Boolean(puzzleStateRef.current.heroNodesActive?.[target.id]);
+            const prevEcho = puzzleStateRef.current.echoCollectedInRun;
+            const nextPuzzle = executeInteraction(curLevel, puzzleStateRef.current, target);
+            puzzleStateRef.current = nextPuzzle;
+            playerRef.current = { ...playerRef.current, interactTimer: 0.35 };
+            if (target.kind !== 'portal' && target.kind !== 'echo') {
+              if (replayKeyEventsRef && replayFramesRef) {
+                replayKeyEventsRef.current.push({
+                  tick: Math.max(0, replayFramesRef.current.length - 1),
+                  kind: target.kind,
+                  targetId: target.id,
+                });
+              }
+              if (echoCtrl && echoCtrl.recordingSlot !== null) {
+                echoRecordingEventsRef.current.push({
+                  tick: Math.max(0, echoCtrl.recordingTicks - 1),
+                  kind: target.kind,
+                  targetId: target.id,
+                });
+              }
+            }
+
+            if (target.kind === 'switch' || target.kind === 'echo_plate') audioEngine.playSwitch();
+            else if (target.kind === 'rotating') audioEngine.playRotate();
+            else if (target.kind === 'elevation') audioEngine.playLift();
+            else if (target.kind === 'prism') audioEngine.playPrism();
+            else if (target.kind === 'crystal') audioEngine.playCrystalRestore();
+            else if (target.kind === 'synergy_node') {
+              audioEngine.playHeroAbility(puzzleStateRef.current.activeCharacterId);
+            } else if (target.kind === 'hero_node' && !prevHeroActive) {
+              audioEngine.playHeroAbility(puzzleStateRef.current.activeCharacterId);
+              const hn = (curLevel.heroNodes ?? []).find((n) => n.id === target.id);
+              callbacksRef.current.onHeroAbilityActivated?.([target.id], hn?.bonusShards ?? 0);
+            } else if (target.kind === 'echo' && !prevEcho) {
+              audioEngine.playEchoCollect();
+              callbacksRef.current.onEchoCollected?.(target.id);
+            }
+
+            if (!prevCrystal && nextPuzzle.crystalRestored && target.kind !== 'crystal') {
+              audioEngine.playCrystalRestore();
+              spawnBurst(
+                curLevel.crystal.x * TILE_SIZE,
+                curLevel.crystal.elevation * ELEVATION_STEP + 1.2,
+                curLevel.crystal.z * TILE_SIZE,
+                22
+              );
+            } else {
+              spawnBurst(target.worldX, playerRef.current.y + 0.7, target.worldZ, 12);
+            }
+          }
+
+          if (moveRes.enteredPortal || puzzleStateRef.current.completed) {
+            puzzleStateRef.current = { ...puzzleStateRef.current, completed: true };
+            break;
+          }
+        }
+
+        if (!steppedOnce) {
+          interactionTargetRef.current = findNearestInteraction(
+            curLevel,
+            puzzleStateRef.current,
+            playerRef.current
+          );
+        }
+
+        // Update Duel Ghost visual sample (non-colliding & read-only)
+        const duelSession = activeDuelRef.current;
+        if (duelSession) {
+          const sample = sampleDuelGhostAtTime(
+            duelSession,
+            puzzleStateRef.current.elapsedSeconds
+          );
+          if (sample) {
+            duelGhostPlayerRef.current = sample;
+            duelGhostVisRef.current = true;
+          } else {
+            duelGhostVisRef.current = false;
+          }
+        } else {
+          duelGhostVisRef.current = false;
+        }
+
+        if (playerRef.current.isMoving) {
           footstepTimerRef.current -= dt;
           if (footstepTimerRef.current <= 0) {
             footstepTimerRef.current = 0.28;
@@ -775,78 +1311,7 @@ const SceneContent: React.FC<
           footstepTimerRef.current = 0.05;
         }
 
-        if (moveRes.triggeredSwitchId) {
-          audioEngine.playSwitch();
-          const sw = curLevel.pressureSwitches.find((s) => s.id === moveRes.triggeredSwitchId);
-          if (sw) {
-            spawnBurst(sw.x * TILE_SIZE, sw.elevation * ELEVATION_STEP + 0.35, sw.z * TILE_SIZE, 14);
-          }
-        }
-
-        if (moveRes.collectedEchoId) {
-          audioEngine.playEchoCollect();
-          spawnBurst(playerRef.current.x, playerRef.current.y + 0.8, playerRef.current.z, 20);
-          callbacksRef.current.onEchoCollected?.(moveRes.collectedEchoId);
-        }
-
-        const abilityRequested =
-          justPressedRef.current.has('KeyQ') || pendingAbilityFromHudRef.current;
-        if (abilityRequested) {
-          pendingAbilityFromHudRef.current = false;
-          const abilityRes = activateHeroAbility(curLevel, puzzleStateRef.current, playerRef.current);
-          if (abilityRes.pulsed) {
-            puzzleStateRef.current = abilityRes.puzzleState;
-            audioEngine.playHeroAbility(puzzleStateRef.current.activeCharacterId);
-            spawnBurst(playerRef.current.x, playerRef.current.y + 0.75, playerRef.current.z, 18);
-            const bonusShards = (curLevel.heroNodes ?? [])
-              .filter((hn) => abilityRes.activatedNodeIds.includes(hn.id))
-              .reduce((acc, hn) => acc + (hn.bonusShards ?? 0), 0);
-            callbacksRef.current.onHeroAbilityActivated?.(abilityRes.activatedNodeIds, bonusShards);
-          }
-        }
-
-        const target = findNearestInteraction(curLevel, puzzleStateRef.current, playerRef.current);
-        interactionTargetRef.current = target;
-
-        const interactPressed =
-          justPressedRef.current.has('KeyE') || justPressedRef.current.has('Space');
-        if (interactPressed && target) {
-          const prevCrystal = puzzleStateRef.current.crystalRestored;
-          const prevHeroActive = Boolean(puzzleStateRef.current.heroNodesActive?.[target.id]);
-          const prevEcho = puzzleStateRef.current.echoCollectedInRun;
-          const nextPuzzle = executeInteraction(curLevel, puzzleStateRef.current, target);
-          puzzleStateRef.current = nextPuzzle;
-          playerRef.current = { ...playerRef.current, interactTimer: 0.35 };
-
-          if (target.kind === 'switch') audioEngine.playSwitch();
-          else if (target.kind === 'rotating') audioEngine.playRotate();
-          else if (target.kind === 'elevation') audioEngine.playLift();
-          else if (target.kind === 'prism') audioEngine.playPrism();
-          else if (target.kind === 'crystal') audioEngine.playCrystalRestore();
-          else if (target.kind === 'hero_node' && !prevHeroActive) {
-            audioEngine.playHeroAbility(puzzleStateRef.current.activeCharacterId);
-            const hn = (curLevel.heroNodes ?? []).find((n) => n.id === target.id);
-            callbacksRef.current.onHeroAbilityActivated?.([target.id], hn?.bonusShards ?? 0);
-          } else if (target.kind === 'echo' && !prevEcho) {
-            audioEngine.playEchoCollect();
-            callbacksRef.current.onEchoCollected?.(target.id);
-          }
-
-          if (!prevCrystal && nextPuzzle.crystalRestored && target.kind !== 'crystal') {
-            audioEngine.playCrystalRestore();
-            spawnBurst(
-              curLevel.crystal.x * TILE_SIZE,
-              curLevel.crystal.elevation * ELEVATION_STEP + 1.2,
-              curLevel.crystal.z * TILE_SIZE,
-              22
-            );
-          } else {
-            spawnBurst(target.worldX, playerRef.current.y + 0.7, target.worldZ, 12);
-          }
-        }
-
-        if (!wasCompleted && (moveRes.enteredPortal || puzzleStateRef.current.completed)) {
-          puzzleStateRef.current = { ...puzzleStateRef.current, completed: true };
+        if (!wasCompleted && puzzleStateRef.current.completed) {
           audioEngine.playPortalComplete();
           spawnBurst(
             curLevel.portal.x * TILE_SIZE,
@@ -869,7 +1334,11 @@ const SceneContent: React.FC<
 
         const ps = puzzleStateRef.current;
         const heroNodesActivatedCount = Object.values(ps.heroNodesActive ?? {}).filter(Boolean).length;
-        const nextHudKey = `${target?.prompt ?? ''}|${ps.crystalRestored}|${ps.portalAwakened}|${ps.interactionsCount}|${Math.floor(ps.elapsedSeconds)}|${Math.ceil(ps.abilityCooldown * 4)}|${ps.abilityActiveTimer > 0.05}|${ps.echoCollectedInRun}|${heroNodesActivatedCount}`;
+        const echoSlotKey = echoCtrl
+          ? `${echoCtrl.recordingSlot ?? 'n'}|${Math.floor(echoCtrl.recordingTicks / 15)}|${echoCtrl.isPlayingBack ? 1 : 0}|${Math.floor(echoCtrl.playbackTick / 15)}|${echoCtrl.slots.map((s, i) => `${s ? s.durationTicks : 0}@${echoCtrl.slotOffsets[i]}`).join(',')}`
+          : '';
+        const target = interactionTargetRef.current;
+        const nextHudKey = `${target?.prompt ?? ''}|${ps.crystalRestored}|${ps.portalAwakened}|${ps.interactionsCount}|${Math.floor(ps.elapsedSeconds)}|${Math.ceil(ps.abilityCooldown * 4)}|${ps.abilityActiveTimer > 0.05}|${ps.echoCollectedInRun}|${heroNodesActivatedCount}|${echoSlotKey}|${ps.activeCharacterId}|${ps.companionCharacterId ?? ''}|${Boolean(ps.companionHoldPosition)}`;
         if (nextHudKey !== lastHudSentRef.current) {
           lastHudSentRef.current = nextHudKey;
           callbacksRef.current.onHudSync({
@@ -882,6 +1351,37 @@ const SceneContent: React.FC<
             abilityActiveTimer: ps.abilityActiveTimer,
             echoCollectedInRun: ps.echoCollectedInRun,
             heroNodesActivatedCount,
+            echoRecordingSlot: echoCtrl ? echoCtrl.recordingSlot : null,
+            echoRecordingProgress:
+              echoCtrl && echoCtrl.recordingSlot !== null
+                ? Math.min(1, echoCtrl.recordingTicks / Math.max(1, echoCtrl.maxRecordingTicks))
+                : 0,
+            echoPlayingBack: Boolean(echoCtrl?.isPlayingBack),
+            echoPlaybackSeconds: echoCtrl ? Number((echoCtrl.playbackTick / ECHO_TICK_RATE).toFixed(1)) : 0,
+            echoSlotSummaries: echoCtrl
+              ? [0, 1, 2].map((idx) => {
+                  const rec = echoCtrl.slots[idx];
+                  const offsetTicks = echoCtrl.slotOffsets[idx] ?? 0;
+                  const activeNow = Boolean(
+                    rec &&
+                      echoCtrl.isPlayingBack &&
+                      echoCtrl.playbackTick >= offsetTicks
+                  );
+                  return {
+                    slotIndex: idx,
+                    recorded: Boolean(rec),
+                    durationSeconds: rec ? Number((rec.durationTicks / ECHO_TICK_RATE).toFixed(1)) : 0,
+                    offsetSeconds: Number((offsetTicks / ECHO_TICK_RATE).toFixed(1)),
+                    activeNow,
+                    characterId: rec?.characterId,
+                  };
+                })
+              : undefined,
+            activeHeroId: ps.activeCharacterId,
+            companionHeroId: ps.companionCharacterId ?? null,
+            companionHoldPosition: Boolean(ps.companionHoldPosition),
+            duelGhostTime: duelSession?.creatorTime,
+            duelCreatorAlias: duelSession?.creatorAlias,
           });
         }
       } else {
@@ -1157,6 +1657,56 @@ const SceneContent: React.FC<
         palette={palette}
         isSoftwareGl={isSoftwareGl}
         appearance={heroAppearance}
+        onRegisterFrame={registerFrame}
+      />
+
+      {/* Party Companion Hero */}
+      <HeroModel
+        playerRef={companionPlayerViewRef}
+        palette={palette}
+        isSoftwareGl={isSoftwareGl}
+        appearance={companionAppearance}
+        visibilityRef={companionVisRef}
+        onRegisterFrame={registerFrame}
+      />
+
+      {/* Echo Engine Ghosts (Slots 0..2) */}
+      <HeroModel
+        playerRef={echo0PlayerRef}
+        palette={palette}
+        isSoftwareGl={isSoftwareGl}
+        appearance={heroAppearance}
+        ghostStyle="echo"
+        visibilityRef={echo0VisRef}
+        onRegisterFrame={registerFrame}
+      />
+      <HeroModel
+        playerRef={echo1PlayerRef}
+        palette={palette}
+        isSoftwareGl={isSoftwareGl}
+        appearance={heroAppearance}
+        ghostStyle="echo"
+        visibilityRef={echo1VisRef}
+        onRegisterFrame={registerFrame}
+      />
+      <HeroModel
+        playerRef={echo2PlayerRef}
+        palette={palette}
+        isSoftwareGl={isSoftwareGl}
+        appearance={heroAppearance}
+        ghostStyle="echo"
+        visibilityRef={echo2VisRef}
+        onRegisterFrame={registerFrame}
+      />
+
+      {/* Asynchronous Echo Duel Rival Ghost */}
+      <HeroModel
+        playerRef={duelGhostPlayerRef}
+        palette={palette}
+        isSoftwareGl={isSoftwareGl}
+        appearance={heroAppearance}
+        ghostStyle="duel"
+        visibilityRef={duelGhostVisRef}
         onRegisterFrame={registerFrame}
       />
 

@@ -5,11 +5,11 @@ import { SaveProgress, SaveStatus } from './types';
 
 export const PRIMARY_SAVE_KEY = 'luma_floating_worlds_save_v1';
 export const BACKUP_SAVE_KEY = 'luma_floating_worlds_save_backup_v1';
-export const CURRENT_SAVE_SCHEMA_VERSION = 3;
+export const CURRENT_SAVE_SCHEMA_VERSION = 4;
 
 export interface SaveExportEnvelope {
   app: 'LUMA: Floating Worlds';
-  edition: 'The Living Archipelago';
+  edition: 'Unbound — Play Beyond Worlds';
   schemaVersion: number;
   exportedAt: string;
   data: SaveProgress;
@@ -138,18 +138,24 @@ export function readSaveWithRecovery(
   };
 }
 
-function trimSessionHistoryForQuota(progress: SaveProgress, keepPerStage = 2): SaveProgress {
-  if (!progress.sessionHistory) return progress;
-  const trimmed: NonNullable<SaveProgress['sessionHistory']> = {};
-  for (const [k, list] of Object.entries(progress.sessionHistory)) {
-    const id = Number(k);
-    if (Array.isArray(list) && list.length > 0) {
-      trimmed[id] = list.slice(0, keepPerStage);
+function trimForQuotaRecovery(progress: SaveProgress, keepPerStage = 2): SaveProgress {
+  let trimmedSession = progress.sessionHistory;
+  if (progress.sessionHistory) {
+    const out: NonNullable<SaveProgress['sessionHistory']> = {};
+    for (const [k, list] of Object.entries(progress.sessionHistory)) {
+      const id = Number(k);
+      if (Array.isArray(list) && list.length > 0) {
+        out[id] = list.slice(0, keepPerStage);
+      }
     }
+    trimmedSession = out;
   }
+
   return {
     ...progress,
-    sessionHistory: trimmed,
+    sessionHistory: trimmedSession,
+    savedReplays: (progress.savedReplays ?? []).slice(0, 3),
+    echoDuelsHistory: (progress.echoDuelsHistory ?? []).slice(0, 10),
   };
 }
 
@@ -185,9 +191,9 @@ export function writeSaveAtomic(
       usedFallbackTrim: false,
     };
   } catch (err) {
-    // QuotaExceededError recovery: trim older session history & retry primary write
+    // QuotaExceededError recovery: trim non-critical histories/replays & retry primary write
     try {
-      const compacted = validateFn(trimSessionHistoryForQuota(validated, 1));
+      const compacted = validateFn(trimForQuotaRecovery(validated, 1));
       const compactPayload = JSON.stringify(compacted);
       window.localStorage.setItem(PRIMARY_SAVE_KEY, compactPayload);
       return {
@@ -214,7 +220,7 @@ export function exportSavePayload(
   const validated = validateFn(progress);
   const envelope: SaveExportEnvelope = {
     app: 'LUMA: Floating Worlds',
-    edition: 'The Living Archipelago',
+    edition: 'Unbound — Play Beyond Worlds',
     schemaVersion: CURRENT_SAVE_SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
     data: validated,

@@ -34,14 +34,26 @@ import {
   SaveWriteResult,
   writeSaveAtomic,
 } from './saveManager';
+import { computeDailyRiftStreak } from './dailyRift';
+import {
+  parseAndValidateLumaPack,
+  parseAndValidateLumaReplay,
+  parseAndValidateLumaStage,
+} from './customFormats';
 import {
   CharacterId,
   CompletionSummary,
   CosmeticId,
+  DailyChallengeType,
+  DailyRiftRecord,
+  EchoDuelRecord,
   EquippedCosmetics,
   GameSettings,
   HubAreaId,
   LevelMasteryRecord,
+  LumaCustomStageFile,
+  LumaReplayFile,
+  LumaStagePackFile,
   NpcId,
   PersistentStatistics,
   QuestProgressRecord,
@@ -52,7 +64,7 @@ import {
 import { WORLDS } from './worlds';
 
 export const STORAGE_KEY = 'luma_floating_worlds_save_v1';
-export const CURRENT_SAVE_VERSION = 3;
+export const CURRENT_SAVE_VERSION = 4;
 
 export const DEFAULT_SETTINGS: GameSettings = {
   soundEnabled: true,
@@ -120,6 +132,15 @@ export const DEFAULT_PROGRESS: SaveProgress = {
   abilityUsageCount: 0,
   heroNodesResonatedCount: 0,
   mechanismsActivatedCount: 0,
+  customStages: [],
+  importedPacks: [],
+  savedReplays: [],
+  favoriteStageIds: [],
+  recentlyPlayedCustomIds: [],
+  dailyRiftRecords: {},
+  dailyRiftStreak: 0,
+  echoDuelsHistory: [],
+  activePartyHero2: null,
 };
 
 const VALID_ECHO_IDS = new Set(
@@ -229,6 +250,15 @@ export function validateSaveProgress(raw: unknown): SaveProgress {
       visitedHubAreas: [],
       restoredWorlds: [],
       unlockedTitles: [],
+      customStages: [],
+      importedPacks: [],
+      savedReplays: [],
+      favoriteStageIds: [],
+      recentlyPlayedCustomIds: [],
+      dailyRiftRecords: {},
+      dailyRiftStreak: 0,
+      echoDuelsHistory: [],
+      activePartyHero2: null,
     };
     const evalRes = evaluateAllQuests(fresh);
     fresh.questProgress = evalRes.questProgress;
@@ -582,12 +612,130 @@ export function validateSaveProgress(raw: unknown): SaveProgress {
       typeof obj.lastUpdatedAt === 'number' && Number.isFinite(obj.lastUpdatedAt)
         ? obj.lastUpdatedAt
         : undefined,
+    customStages: Array.isArray(obj.customStages)
+      ? obj.customStages
+          .slice(0, 24)
+          .map((s) => {
+            try {
+              const res = parseAndValidateLumaStage(JSON.stringify(s));
+              return res.ok ? res.data : null;
+            } catch {
+              return null;
+            }
+          })
+          .filter((s): s is LumaCustomStageFile => s !== null)
+      : [],
+    importedPacks: Array.isArray(obj.importedPacks)
+      ? obj.importedPacks
+          .slice(0, 8)
+          .map((p) => {
+            try {
+              const res = parseAndValidateLumaPack(JSON.stringify(p));
+              return res.ok ? res.data : null;
+            } catch {
+              return null;
+            }
+          })
+          .filter((p): p is LumaStagePackFile => p !== null)
+      : [],
+    savedReplays: Array.isArray(obj.savedReplays)
+      ? obj.savedReplays
+          .slice(0, 10)
+          .map((r) => {
+            try {
+              const res = parseAndValidateLumaReplay(JSON.stringify(r));
+              return res.ok
+                ? { ...res.data, verified: Boolean((r as Record<string, unknown>)?.verified) }
+                : null;
+            } catch {
+              return null;
+            }
+          })
+          .filter((r): r is LumaReplayFile => r !== null)
+      : [],
+    favoriteStageIds: Array.isArray(obj.favoriteStageIds)
+      ? Array.from(
+          new Set(
+            obj.favoriteStageIds.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 64)
+          )
+        ).slice(0, 48)
+      : [],
+    recentlyPlayedCustomIds: Array.isArray(obj.recentlyPlayedCustomIds)
+      ? Array.from(
+          new Set(
+            obj.recentlyPlayedCustomIds.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 64)
+          )
+        ).slice(0, 24)
+      : [],
+    dailyRiftRecords: (() => {
+      const out: Record<string, DailyRiftRecord> = {};
+      if (obj.dailyRiftRecords && typeof obj.dailyRiftRecords === 'object') {
+        const entries = Object.entries(obj.dailyRiftRecords as Record<string, unknown>).slice(0, 45);
+        for (const [k, v] of entries) {
+          if (!v || typeof v !== 'object') continue;
+          const rec = v as Record<string, unknown>;
+          out[k] = {
+            dateKey: typeof rec.dateKey === 'string' ? rec.dateKey.slice(0, 24) : k,
+            seed: typeof rec.seed === 'number' && Number.isFinite(rec.seed) ? rec.seed >>> 0 : 0,
+            generatorVersion:
+              typeof rec.generatorVersion === 'string' ? rec.generatorVersion.slice(0, 20) : 'rift-v1',
+            challengeType: (typeof rec.challengeType === 'string'
+              ? rec.challengeType
+              : 'standard') as DailyChallengeType,
+            completed: Boolean(rec.completed),
+            bestTime:
+              typeof rec.bestTime === 'number' && Number.isFinite(rec.bestTime) && rec.bestTime > 0
+                ? rec.bestTime
+                : undefined,
+            bestActions:
+              typeof rec.bestActions === 'number' && Number.isFinite(rec.bestActions) && rec.bestActions >= 0
+                ? Math.round(rec.bestActions)
+                : undefined,
+            bestStars: clampStars(rec.bestStars),
+            attempts:
+              typeof rec.attempts === 'number' && Number.isFinite(rec.attempts) && rec.attempts >= 0
+                ? Math.trunc(rec.attempts)
+                : 0,
+            lastPlayedAt:
+              typeof rec.lastPlayedAt === 'number' && Number.isFinite(rec.lastPlayedAt)
+                ? rec.lastPlayedAt
+                : undefined,
+          };
+        }
+      }
+      return out;
+    })(),
+    dailyRiftStreak: 0,
+    echoDuelsHistory: Array.isArray(obj.echoDuelsHistory)
+      ? (obj.echoDuelsHistory as EchoDuelRecord[])
+          .filter(
+            (d) =>
+              d &&
+              typeof d === 'object' &&
+              typeof d.stageTitle === 'string' &&
+              typeof d.challengerTime === 'number'
+          )
+          .slice(0, 30)
+      : [],
+    activePartyHero2: (() => {
+      const cand = obj.activePartyHero2;
+      if (
+        typeof cand === 'string' &&
+        unlockedCharacters.includes(cand as CharacterId) &&
+        cand !== selectedCharacterId
+      ) {
+        return cand as CharacterId;
+      }
+      return null;
+    })(),
   };
+
+  draft.dailyRiftStreak = computeDailyRiftStreak(draft.dailyRiftRecords);
 
   // Evaluate quest state deterministically without duplicating rewards if already claimed
   const questEval = evaluateAllQuests(draft);
   const incomingVersion = typeof obj.saveVersion === 'number' ? obj.saveVersion : 1;
-  // On v1/v2 migration OR new step completions, grant one-time rewards once cleanly
+  // On v1/v2/v3 migration OR new step completions, grant one-time rewards once cleanly
   if (incomingVersion < CURRENT_SAVE_VERSION || Object.keys(rawQuestProgress).length > 0) {
     if (questEval.shardsAwarded > 0) {
       lumaShards += questEval.shardsAwarded;
@@ -1071,4 +1219,156 @@ export function loadProgress(): SaveProgress {
 
 export function saveProgress(progress: SaveProgress): void {
   writeSaveAtomic(progress, validateSaveProgress);
+}
+
+// ============================================================
+// LUMA: UNBOUND — Local Custom Stages, Replays, Rifts & Duels
+// ============================================================
+
+export function saveCustomStageInProgress(
+  progress: SaveProgress,
+  stage: LumaCustomStageFile
+): SaveProgress {
+  const existing = progress.customStages ?? [];
+  const filtered = existing.filter((s) => s.id !== stage.id);
+  return validateSaveProgress({
+    ...progress,
+    customStages: [stage, ...filtered].slice(0, 24),
+  });
+}
+
+export function deleteCustomStageInProgress(
+  progress: SaveProgress,
+  stageId: string
+): SaveProgress {
+  return validateSaveProgress({
+    ...progress,
+    customStages: (progress.customStages ?? []).filter((s) => s.id !== stageId),
+    favoriteStageIds: (progress.favoriteStageIds ?? []).filter((id) => id !== stageId),
+    recentlyPlayedCustomIds: (progress.recentlyPlayedCustomIds ?? []).filter((id) => id !== stageId),
+  });
+}
+
+export function saveImportedPackInProgress(
+  progress: SaveProgress,
+  pack: LumaStagePackFile
+): SaveProgress {
+  const existing = progress.importedPacks ?? [];
+  const filtered = existing.filter((p) => p.id !== pack.id);
+  return validateSaveProgress({
+    ...progress,
+    importedPacks: [pack, ...filtered].slice(0, 8),
+  });
+}
+
+export function saveReplayInProgress(
+  progress: SaveProgress,
+  replay: LumaReplayFile
+): SaveProgress {
+  const existing = progress.savedReplays ?? [];
+  return validateSaveProgress({
+    ...progress,
+    savedReplays: [replay, ...existing].slice(0, 10),
+  });
+}
+
+export function toggleFavoriteStageInProgress(
+  progress: SaveProgress,
+  stageId: string
+): SaveProgress {
+  const prev = progress.favoriteStageIds ?? [];
+  const exists = prev.includes(stageId);
+  const next = exists ? prev.filter((id) => id !== stageId) : [stageId, ...prev];
+  return validateSaveProgress({
+    ...progress,
+    favoriteStageIds: next,
+  });
+}
+
+export function recordRecentlyPlayedCustomInProgress(
+  progress: SaveProgress,
+  stageId: string
+): SaveProgress {
+  const prev = progress.recentlyPlayedCustomIds ?? [];
+  const next = [stageId, ...prev.filter((id) => id !== stageId)].slice(0, 24);
+  return validateSaveProgress({
+    ...progress,
+    recentlyPlayedCustomIds: next,
+  });
+}
+
+export function recordDailyRiftAttemptInProgress(
+  progress: SaveProgress,
+  params: {
+    dateKey: string;
+    seed: number;
+    generatorVersion: string;
+    challengeType: DailyChallengeType;
+    completed: boolean;
+    clearSeconds?: number;
+    actionsUsed?: number;
+    stars?: 0 | 1 | 2 | 3;
+  }
+): SaveProgress {
+  const existingMap = { ...(progress.dailyRiftRecords ?? {}) };
+  const prev = existingMap[params.dateKey];
+  const nextCompleted = Boolean(prev?.completed || params.completed);
+  const nextBestTime =
+    params.completed && params.clearSeconds !== undefined
+      ? prev?.bestTime !== undefined
+        ? Math.min(prev.bestTime, params.clearSeconds)
+        : params.clearSeconds
+      : prev?.bestTime;
+  const nextBestActions =
+    params.completed && params.actionsUsed !== undefined
+      ? prev?.bestActions !== undefined
+        ? Math.min(prev.bestActions, params.actionsUsed)
+        : params.actionsUsed
+      : prev?.bestActions;
+  const nextBestStars = Math.max(prev?.bestStars ?? 0, params.stars ?? 0) as 0 | 1 | 2 | 3;
+
+  existingMap[params.dateKey] = {
+    dateKey: params.dateKey,
+    seed: params.seed,
+    generatorVersion: params.generatorVersion,
+    challengeType: params.challengeType,
+    completed: nextCompleted,
+    bestTime: nextBestTime,
+    bestActions: nextBestActions,
+    bestStars: nextBestStars,
+    attempts: (prev?.attempts ?? 0) + 1,
+    lastPlayedAt: Date.now(),
+  };
+
+  return validateSaveProgress({
+    ...progress,
+    dailyRiftRecords: existingMap,
+    dailyRiftStreak: computeDailyRiftStreak(existingMap),
+  });
+}
+
+export function recordEchoDuelResultInProgress(
+  progress: SaveProgress,
+  record: EchoDuelRecord
+): SaveProgress {
+  return validateSaveProgress({
+    ...progress,
+    echoDuelsHistory: [record, ...(progress.echoDuelsHistory ?? [])].slice(0, 30),
+  });
+}
+
+export function setActivePartyCompanionInProgress(
+  progress: SaveProgress,
+  companionId: CharacterId | null
+): SaveProgress {
+  const unlocked = progress.unlockedCharacters ?? ['wayfinder'];
+  const primary = progress.selectedCharacterId ?? 'wayfinder';
+  const validCompanion =
+    companionId && unlocked.includes(companionId) && companionId !== primary
+      ? companionId
+      : null;
+  return validateSaveProgress({
+    ...progress,
+    activePartyHero2: validCompanion,
+  });
 }

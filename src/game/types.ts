@@ -166,6 +166,8 @@ export interface GateDef {
   axis: 'x' | 'z';
   linkedSwitchId?: string;
   linkedSubCrystalId?: string;
+  linkedEchoPlateId?: string;
+  linkedSynergyId?: string;
   inverted?: boolean;
   blocksLight?: boolean;
 }
@@ -258,6 +260,44 @@ export interface EchoFragmentDef {
   secretHint?: string;
 }
 
+export interface EchoPlateDef {
+  id: string;
+  x: number;
+  z: number;
+  elevation: number;
+  /** If true, only a summoned Echo (not the live player) activates this plate */
+  echoOnly?: boolean;
+  /** Optional hold-duration ticks or linked gate/lift */
+  label: string;
+}
+
+export type SynergyKind = 'root_waterway' | 'steam_forge_lift' | 'wind_rune_relay';
+
+export interface SynergyNodeDef {
+  id: string;
+  kind: SynergyKind;
+  heroA: CharacterId;
+  heroB: CharacterId;
+  x: number;
+  z: number;
+  elevation: number;
+  label: string;
+  bridgeTiles?: Array<{ x: number; z: number; elevation: number; terrain?: TerrainType }>;
+  boostsLiftId?: string;
+  opensGateId?: string;
+}
+
+export interface CustomStageMetadata {
+  formatVersion: number;
+  engineVersion: string;
+  customId?: string;
+  authorAlias?: string;
+  difficulty?: 'gentle' | 'balanced' | 'master';
+  tags?: string[];
+  stageHash?: string;
+  source?: 'campaign' | 'custom' | 'daily_rift' | 'community';
+}
+
 export interface LevelDef {
   id: number;
   worldId?: WorldId;
@@ -281,6 +321,14 @@ export interface LevelDef {
   lightPrisms: LightPrismDef[];
   subCrystals?: SubCrystalDef[];
   heroNodes?: HeroNodeDef[];
+  echoPlates?: EchoPlateDef[];
+  synergyNodes?: SynergyNodeDef[];
+  echoEnabled?: boolean;
+  maxEchoes?: number;
+  maxEchoSeconds?: number;
+  partyEnabled?: boolean;
+  requiredCompanion?: CharacterId;
+  customMeta?: CustomStageMetadata;
   echoFragment?: EchoFragmentDef;
   crystal: CrystalDef;
   portal: PortalDef;
@@ -315,6 +363,13 @@ export interface PuzzleRuntimeState {
   interactionsCount: number;
   elapsedSeconds: number;
   completed: boolean;
+  /** Unbound: Echo Engine & Hero Synergy live state */
+  echoPlateStates?: Record<string, boolean>;
+  synergyNodesActive?: Record<string, boolean>;
+  companionCharacterId?: CharacterId | null;
+  companionPos?: { x: number; y: number; z: number; facingAngle: number; isMoving: boolean; walkCycle: number };
+  companionHoldPosition?: boolean;
+  activePartySlot?: 0 | 1;
   /** Internal developer-only overrides; always undefined in normal gameplay */
   debugGateOverrides?: Record<string, 'open' | 'closed'>;
   debugDisabledEmitters?: Record<string, boolean>;
@@ -336,12 +391,14 @@ export interface PlayerRuntimeState {
 export interface InteractionTarget {
   kind:
     | 'switch'
+    | 'echo_plate'
     | 'rotating'
     | 'elevation'
     | 'prism'
     | 'crystal'
     | 'portal'
     | 'hero_node'
+    | 'synergy_node'
     | 'echo';
   id: string;
   prompt: string;
@@ -713,6 +770,131 @@ export interface GameSettings {
   cameraZoomOffset: number;
 }
 
+export type DailyChallengeType =
+  | 'standard'
+  | 'limited_action'
+  | 'time_attack'
+  | 'no_echo'
+  | 'hero_ability'
+  | 'minimal_movement'
+  | 'no_hint';
+
+export interface EchoInputFrame {
+  tick: number;
+  moveX: -1 | 0 | 1;
+  moveZ: -1 | 0 | 1;
+  interact?: boolean;
+  ability?: boolean;
+  switchHero?: boolean;
+}
+
+export interface EchoKeyEvent {
+  tick: number;
+  kind:
+    | 'switch'
+    | 'echo_plate'
+    | 'rotating'
+    | 'elevation'
+    | 'prism'
+    | 'crystal'
+    | 'hero_node'
+    | 'synergy_node'
+    | 'ability';
+  targetId: string;
+}
+
+export interface EchoRecording {
+  id: string;
+  slotIndex: number;
+  label: string;
+  characterId: CharacterId;
+  durationTicks: number;
+  timeOffsetTicks: number;
+  frames: EchoInputFrame[];
+  keyEvents: EchoKeyEvent[];
+  recordedAt: number;
+}
+
+export interface LumaReplayFile {
+  format: 'luma-replay';
+  formatVersion: 1;
+  engineVersion: string;
+  stageHash: string;
+  stageTitle: string;
+  characterId: CharacterId;
+  companionId?: CharacterId | null;
+  clearSeconds: number;
+  actionsUsed: number;
+  stars: 0 | 1 | 2 | 3;
+  tickRate: 30;
+  frames: EchoInputFrame[];
+  keyEvents: EchoKeyEvent[];
+  createdAt: number;
+  challengerAlias?: string;
+  verified: boolean;
+}
+
+export interface LumaCustomStageFile {
+  format: 'luma';
+  formatVersion: 1;
+  engineVersion: string;
+  id: string;
+  title: string;
+  description: string;
+  difficulty: 'gentle' | 'balanced' | 'master';
+  authorAlias: string;
+  worldTheme: WorldId;
+  createdAt: number;
+  updatedAt: number;
+  stageHash: string;
+  level: LevelDef;
+  verifiedSolvable: boolean;
+  bestClearSeconds?: number;
+  bestActions?: number;
+  localRating?: number;
+  tags?: string[];
+}
+
+export interface LumaStagePackFile {
+  format: 'luma-pack';
+  formatVersion: 1;
+  engineVersion: string;
+  id: string;
+  title: string;
+  description: string;
+  authorAlias: string;
+  stages: LumaCustomStageFile[];
+  challengeReplay?: LumaReplayFile;
+  createdAt: number;
+}
+
+export interface DailyRiftRecord {
+  dateKey: string;
+  seed: number;
+  generatorVersion: string;
+  challengeType: DailyChallengeType;
+  completed: boolean;
+  bestTime?: number;
+  bestActions?: number;
+  bestStars: 0 | 1 | 2 | 3;
+  attempts: number;
+  lastPlayedAt?: number;
+}
+
+export interface EchoDuelRecord {
+  id: string;
+  stageHash: string;
+  stageTitle: string;
+  creatorAlias: string;
+  creatorTime: number;
+  creatorActions: number;
+  challengerTime: number;
+  challengerActions: number;
+  challengerWon: boolean;
+  verifiedReplay: boolean;
+  playedAt: number;
+}
+
 export interface SaveProgress {
   saveVersion?: number;
   completedLevels: number[];
@@ -747,6 +929,16 @@ export interface SaveProgress {
   mechanismsActivatedCount?: number;
   unlockedQuestCosmetics?: CosmeticId[];
   lastUpdatedAt?: number;
+  // Unbound (v4) Local-First Creator & Challenge State
+  customStages?: LumaCustomStageFile[];
+  importedPacks?: LumaStagePackFile[];
+  savedReplays?: LumaReplayFile[];
+  favoriteStageIds?: string[];
+  recentlyPlayedCustomIds?: string[];
+  dailyRiftRecords?: Record<string, DailyRiftRecord>;
+  dailyRiftStreak?: number;
+  echoDuelsHistory?: EchoDuelRecord[];
+  activePartyHero2?: CharacterId | null;
 }
 
-export type GameScreenState = 'title' | 'hub' | 'playing' | 'paused' | 'gameover';
+export type GameScreenState = 'title' | 'hub' | 'playing' | 'paused' | 'gameover' | 'forge';

@@ -17,6 +17,7 @@ import {
   getSurfaceAtTile,
 } from './rules';
 import {
+  CURRENT_SAVE_VERSION,
   purchaseCosmeticInProgress,
   recordLevelCompletionDetailed,
   selectCharacterInProgress,
@@ -327,7 +328,7 @@ test('Hero progression, [Q] ability activation, Luma Shards shop, and lossless v
     equippedCosmetics: { cloakId: 'default_cloak', lanternId: 'default_lantern', setId: null },
   };
   const migrated = validateSaveProgress(v1Save);
-  assert.equal(migrated.saveVersion, 3);
+  assert.equal(migrated.saveVersion, CURRENT_SAVE_VERSION);
   assert.deepEqual(migrated.completedLevels, [1, 2, 10]);
   assert.deepEqual(migrated.collectedEchoFragments, []);
   assert.equal(migrated.unlockedCharacters?.includes('sylvi'), true);
